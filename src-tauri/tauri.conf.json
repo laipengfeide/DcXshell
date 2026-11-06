@@ -1,0 +1,43 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Dc Xshell",
+  "version": "1.0.0",
+  "identifier": "com.dcxshell.app",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Dc Xshell",
+        "width": 1360,
+        "height": 860,
+        "minWidth": 1000,
+        "minHeight": 640,
+        "center": true,
+        "decorations": false,
+        "transparent": false,
+        "theme": "Dark",
+        "resizable": true
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis"],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.ico"
+    ],
+    "shortDescription": "Dc Xshell SSH 终端",
+    "longDescription": "面向运维、测试与研发人员的轻量 SSH 终端客户端，无需 USB Key 即可登录服务器。"
+  }
+}

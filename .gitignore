@@ -1,0 +1,17 @@
+# 依赖
+node_modules/
+
+# 构建产物
+dist/
+src-tauri/target/
+src-tauri/gen/
+
+# 安装包 / 可执行文件 / 调试产物
+*.exe
+*.msi
+*.pdb
+
+# 其他
+.DS_Store
+*.log
+.env

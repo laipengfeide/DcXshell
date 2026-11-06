@@ -1,0 +1,276 @@
+:root {
+  --bg-0: #070b0e;
+  --bg-1: #0b1116;
+  --bg-2: #0f171d;
+  --bg-3: #141f27;
+  --border: #1d2b34;
+  --border-strong: #2a3c48;
+  --text: #dbe7ef;
+  --text-dim: #8ba0ad;
+  --text-mute: #5e7280;
+  --accent: #2dd4bf;
+  --accent-dark: #14b8a6;
+  --blue: #60a5fa;
+  --green: #34d399;
+  --amber: #fbbf24;
+  --red: #f87171;
+  --radius: 10px;
+  --font-ui: "Segoe UI Variable Display", "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei",
+    system-ui, sans-serif;
+  --font-mono: "Cascadia Mono", "Cascadia Code", Consolas, "JetBrains Mono", "Courier New",
+    monospace;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+}
+
+body {
+  background: var(--bg-0);
+  color: var(--text);
+  font-family: var(--font-ui);
+  font-size: 13px;
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+}
+
+button {
+  font-family: inherit;
+}
+
+input,
+textarea {
+  user-select: text;
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #23343f;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #2f4653;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::selection {
+  background: rgba(45, 212, 191, 0.28);
+}
+
+/* --------------------------------------------------------------------------
+   标题栏
+   -------------------------------------------------------------------------- */
+.titlebar {
+  height: 40px;
+  flex: 0 0 40px;
+  display: flex;
+  align-items: center;
+  background: linear-gradient(180deg, #0c141a, #080d11);
+  border-bottom: 1px solid var(--border);
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 0 14px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  color: #eaf6f3;
+  white-space: nowrap;
+}
+
+.brand-mark {
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  display: grid;
+  place-items: center;
+  background: linear-gradient(135deg, #10b981, #0ea5e9);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: #04120f;
+  font-weight: 700;
+  box-shadow: 0 0 14px rgba(45, 212, 191, 0.35);
+}
+
+.brand-name {
+  font-size: 13px;
+}
+
+.brand-name b {
+  color: var(--accent);
+}
+
+.titlebar .drag {
+  flex: 1;
+  height: 100%;
+}
+
+.win-controls {
+  display: flex;
+  height: 100%;
+}
+
+.wc {
+  width: 46px;
+  height: 100%;
+  border: 0;
+  background: transparent;
+  color: #93a7b4;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.wc:hover {
+  background: #152029;
+  color: #e6f2f8;
+}
+
+.wc.close:hover {
+  background: #e81123;
+  color: #fff;
+}
+
+/* --------------------------------------------------------------------------
+   Element Plus 暗色定制
+   -------------------------------------------------------------------------- */
+html.dark {
+  --el-color-primary: #2dd4bf;
+  --el-color-primary-light-3: #5eead4;
+  --el-color-primary-light-5: #2f8a80;
+  --el-color-primary-light-7: #1f4f4b;
+  --el-color-primary-light-8: #193e3a;
+  --el-color-primary-light-9: #143230;
+  --el-color-primary-dark-2: #14b8a6;
+  --el-bg-color: #0f171d;
+  --el-bg-color-page: #070b0e;
+  --el-bg-color-overlay: #121d24;
+  --el-border-color: #22313b;
+  --el-border-color-light: #1b2830;
+  --el-border-color-lighter: #18242c;
+  --el-text-color-primary: #dbe7ef;
+  --el-text-color-regular: #b7c8d2;
+  --el-text-color-secondary: #8ba0ad;
+  --el-text-color-placeholder: #536975;
+  --el-fill-color: #121c23;
+  --el-fill-color-light: #101a20;
+  --el-fill-color-blank: #0d151b;
+  --el-mask-color: rgba(4, 8, 10, 0.6);
+  --el-font-family: var(--font-ui);
+}
+
+.el-button--primary {
+  --el-button-bg-color: #2dd4bf;
+  --el-button-border-color: #2dd4bf;
+  --el-button-text-color: #04120f;
+  --el-button-hover-bg-color: #5eead4;
+  --el-button-hover-border-color: #5eead4;
+  --el-button-hover-text-color: #04120f;
+  --el-button-active-bg-color: #14b8a6;
+  --el-button-active-border-color: #14b8a6;
+  --el-button-active-text-color: #04120f;
+  font-weight: 600;
+}
+
+.el-button--primary.is-disabled,
+.el-button--primary.is-disabled:hover {
+  --el-button-disabled-bg-color: #1b3a38;
+  --el-button-disabled-border-color: #1b3a38;
+  --el-button-disabled-text-color: #587a76;
+}
+
+.el-input__wrapper,
+.el-textarea__inner {
+  background-color: #0a1217;
+  box-shadow: 0 0 0 1px #22313b inset;
+  border-radius: 8px;
+  transition: box-shadow 0.16s ease;
+}
+
+.el-input__wrapper:hover {
+  box-shadow: 0 0 0 1px #2c414d inset;
+}
+
+.el-input__wrapper.is-focus,
+.el-textarea__inner:focus {
+  box-shadow: 0 0 0 1px rgba(45, 212, 191, 0.65) inset, 0 0 0 3px rgba(45, 212, 191, 0.1);
+}
+
+.el-dialog {
+  --el-dialog-bg-color: transparent;
+  padding: 0;
+  border-radius: 14px;
+}
+
+.dc-dialog {
+  background: linear-gradient(180deg, #111c23, #0c151b);
+  border: 1px solid #23343f;
+  border-radius: 14px;
+  box-shadow: 0 30px 80px rgba(0, 0, 0, 0.6);
+  overflow: hidden;
+}
+
+.dc-dialog .el-dialog__header {
+  display: none;
+}
+
+.dc-dialog .el-dialog__body {
+  padding: 0;
+}
+
+.el-overlay {
+  backdrop-filter: blur(2px);
+  background: rgba(4, 8, 10, 0.6);
+}
+
+.el-message {
+  --el-message-bg-color: #101c22;
+  --el-message-border-color: #22343e;
+  --el-message-text-color: #dbe7ef;
+  box-shadow: 0 12px 34px rgba(0, 0, 0, 0.45);
+}
+
+.el-message-box {
+  --el-messagebox-title-color: #dbe7ef;
+  --el-messagebox-content-color: #a9bcc7;
+  --el-messagebox-content-font-size: 13px;
+  background: linear-gradient(180deg, #111c23, #0c151b);
+  border: 1px solid #23343f;
+  border-radius: 12px;
+}
+
+.el-radio__label {
+  color: var(--text-dim);
+  font-size: 13px;
+}
+
+.el-radio {
+  --el-radio-text-color: var(--text-dim);
+}
+
+.el-radio__input.is-checked + .el-radio__label {
+  color: var(--text);
+}
+
+.el-tooltip__popper {
+  font-size: 12px;
+}
