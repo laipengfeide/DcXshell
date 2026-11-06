@@ -1,4 +1,4 @@
-use rusqlite::Connection;
+use rusqlite::{params, Connection, OptionalExtension};
 use std::{fs, path::Path};
 
 const SCHEMA: &str = r#"
@@ -20,6 +20,7 @@ CREATE TABLE IF NOT EXISTS connections (
     password_enc   TEXT,
     key_path       TEXT,
     passphrase_enc TEXT,
+    owner_id       INTEGER,
     sort_order     INTEGER NOT NULL DEFAULT 0,
     created_at     TEXT NOT NULL,
     updated_at     TEXT NOT NULL
@@ -38,7 +39,43 @@ pub fn open(path: &Path) -> rusqlite::Result<Connection> {
     let conn = Connection::open(path)?;
     conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")?;
     conn.execute_batch(SCHEMA)?;
+    migrate_connection_owner(&conn)?;
     Ok(conn)
+}
+
+/// 为历史数据库补充 connections.owner_id 列（NULL 表示访客创建）。
+///
+/// 历史数据没有归属信息，升级时若存在上次登录用户（settings.active_user_id），
+/// 则把这些历史连接归给该用户；否则保留 NULL，继续归属访客。
+fn migrate_connection_owner(conn: &Connection) -> rusqlite::Result<()> {
+    let mut stmt = conn.prepare("PRAGMA table_info(connections)")?;
+    let columns = stmt
+        .query_map([], |row| row.get::<_, String>(1))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    drop(stmt);
+
+    if columns.iter().any(|c| c == "owner_id") {
+        return Ok(());
+    }
+
+    conn.execute("ALTER TABLE connections ADD COLUMN owner_id INTEGER", [])?;
+
+    let active_owner = get_setting(conn, "active_user_id")
+        .and_then(|v| v.trim().parse::<i64>().ok())
+        .filter(|id| {
+            conn.query_row("SELECT 1 FROM users WHERE id = ?1", params![id], |_| Ok(true))
+                .optional()
+                .ok()
+                .flatten()
+                .is_some()
+        });
+    if let Some(owner) = active_owner {
+        conn.execute(
+            "UPDATE connections SET owner_id = ?1 WHERE owner_id IS NULL",
+            params![owner],
+        )?;
+    }
+    Ok(())
 }
 
 pub fn now() -> String {

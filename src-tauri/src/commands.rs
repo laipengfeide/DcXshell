@@ -47,6 +47,15 @@ impl AppState {
             .is_none()
     }
 
+    /// 当前登录用户的 id；访客（未登录）为 None。
+    fn current_owner(&self) -> Option<i64> {
+        self.current_user
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+            .map(|u| u.id)
+    }
+
     pub fn session(&self, client_key: &str) -> Option<Arc<ssh_client::SshSession>> {
         self.sessions
             .lock()
@@ -96,11 +105,13 @@ fn load_stored_secrets(
     state: &AppState,
     id: i64,
 ) -> (Option<String>, Option<String>, Option<String>) {
+    let owner = state.current_owner();
     let stored = {
         let conn = state.conn();
         conn.query_row(
-            "SELECT password_enc, key_path, passphrase_enc FROM connections WHERE id = ?1",
-            params![id],
+            "SELECT password_enc, key_path, passphrase_enc FROM connections
+             WHERE id = ?1 AND owner_id IS ?2",
+            params![id, owner],
             |row| {
                 Ok((
                     row.get::<_, Option<String>>(0)?,
@@ -186,12 +197,13 @@ fn params_from_input(
 }
 
 fn params_from_db(state: &AppState, id: i64) -> Result<(ssh_client::ConnectParams, String), String> {
+    let owner = state.current_owner();
     let row = {
         let conn = state.conn();
         conn.query_row(
             "SELECT name, host, port, username, auth_type, password_enc, key_path, passphrase_enc
-             FROM connections WHERE id = ?1",
-            params![id],
+             FROM connections WHERE id = ?1 AND owner_id IS ?2",
+            params![id, owner],
             |row| {
                 Ok((
                     row.get::<_, String>(0)?,
@@ -300,16 +312,17 @@ pub fn logout(state: State<'_, AppState>) -> Result<(), String> {
 
 #[tauri::command]
 pub fn list_connections(state: State<'_, AppState>) -> Result<Vec<ConnectionItem>, String> {
+    let owner = state.current_owner();
     let conn = state.conn();
     let mut stmt = conn
         .prepare(
             "SELECT id, name, group_name, host, port, username, auth_type, key_path,
                     password_enc, passphrase_enc, created_at, updated_at
-             FROM connections ORDER BY group_name, name, id",
+             FROM connections WHERE owner_id IS ?1 ORDER BY group_name, name, id",
         )
         .map_err(|e| e.to_string())?;
     let rows = stmt
-        .query_map([], |row| {
+        .query_map(params![owner], |row| {
             let password_enc: Option<String> = row.get(8)?;
             let passphrase_enc: Option<String> = row.get(9)?;
             Ok(ConnectionItem {
@@ -342,6 +355,7 @@ pub fn save_connection(
     state: State<'_, AppState>,
     input: ConnectionInput,
 ) -> Result<ConnectionItem, String> {
+    let owner = state.current_owner();
     let name = input.name.trim().to_string();
     if name.is_empty() {
         return Err("连接名称不能为空".into());
@@ -394,8 +408,9 @@ pub fn save_connection(
         Some(id) => {
             let existing = conn
                 .query_row(
-                    "SELECT password_enc, passphrase_enc FROM connections WHERE id = ?1",
-                    params![id],
+                    "SELECT password_enc, passphrase_enc FROM connections
+                     WHERE id = ?1 AND owner_id IS ?2",
+                    params![id, owner],
                     |row| {
                         Ok((
                             row.get::<_, Option<String>>(0)?,
@@ -419,7 +434,7 @@ pub fn save_connection(
                  SET name = ?1, group_name = ?2, host = ?3, port = ?4, username = ?5,
                      auth_type = ?6, password_enc = ?7, key_path = ?8, passphrase_enc = ?9,
                      updated_at = ?10
-                 WHERE id = ?11",
+                 WHERE id = ?11 AND owner_id IS ?12",
                 params![
                     name,
                     group_name,
@@ -431,7 +446,8 @@ pub fn save_connection(
                     key_path,
                     final_passphrase,
                     now,
-                    id
+                    id,
+                    owner
                 ],
             )
             .map_err(|e| e.to_string())?;
@@ -441,8 +457,8 @@ pub fn save_connection(
             conn.execute(
                 "INSERT INTO connections
                  (name, group_name, host, port, username, auth_type, password_enc, key_path,
-                  passphrase_enc, created_at, updated_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?10)",
+                  passphrase_enc, owner_id, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?11)",
                 params![
                     name,
                     group_name,
@@ -453,6 +469,7 @@ pub fn save_connection(
                     password_enc,
                     key_path,
                     passphrase_enc,
+                    owner,
                     now
                 ],
             )
@@ -466,10 +483,14 @@ pub fn save_connection(
 
 #[tauri::command]
 pub async fn delete_connection(state: State<'_, AppState>, id: i64) -> Result<(), String> {
+    let owner = state.current_owner();
     {
         let conn = state.conn();
-        conn.execute("DELETE FROM connections WHERE id = ?1", params![id])
-            .map_err(|e| e.to_string())?;
+        conn.execute(
+            "DELETE FROM connections WHERE id = ?1 AND owner_id IS ?2",
+            params![id, owner],
+        )
+        .map_err(|e| e.to_string())?;
     }
     let targets: Vec<Arc<ssh_client::SshSession>> = state
         .sessions
