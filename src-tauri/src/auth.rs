@@ -93,3 +93,51 @@ pub fn restore_session(conn: &Connection) -> Option<UserInfo> {
 pub fn logout(conn: &Connection) -> Result<(), String> {
     db::del_setting(conn, "active_user_id").map_err(|e| e.to_string())
 }
+
+/// 记录用户最近一次登录的局域网 IP 与时间。
+pub fn touch_login(conn: &Connection, user_id: i64, ip: &str) -> Result<(), String> {
+    conn.execute(
+        "UPDATE users SET last_ip = ?1, last_login_at = ?2 WHERE id = ?3",
+        params![ip, db::now(), user_id],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// 校验原密码后更新为新密码。
+pub fn change_password(
+    conn: &Connection,
+    user_id: i64,
+    old_password: &str,
+    new_password: &str,
+) -> Result<(), String> {
+    if new_password.chars().count() < 6 {
+        return Err("新密码至少需要 6 位".into());
+    }
+    if old_password == new_password {
+        return Err("新密码不能与原密码相同".into());
+    }
+    let hash: String = conn
+        .query_row(
+            "SELECT password_hash FROM users WHERE id = ?1",
+            params![user_id],
+            |row| row.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+    let parsed = PasswordHash::new(&hash).map_err(|e| format!("密码校验失败: {e}"))?;
+    Argon2::default()
+        .verify_password(old_password.as_bytes(), &parsed)
+        .map_err(|_| "原密码不正确".to_string())?;
+
+    let salt = SaltString::generate(&mut OsRng);
+    let new_hash = Argon2::default()
+        .hash_password(new_password.as_bytes(), &salt)
+        .map_err(|e| format!("密码加密失败: {e}"))?
+        .to_string();
+    conn.execute(
+        "UPDATE users SET password_hash = ?1 WHERE id = ?2",
+        params![new_hash, user_id],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}

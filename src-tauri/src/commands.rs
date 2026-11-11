@@ -1,5 +1,6 @@
 use std::{
     collections::HashMap,
+    path::PathBuf,
     sync::{
         atomic::Ordering,
         Arc, Mutex, MutexGuard,
@@ -11,7 +12,7 @@ use rusqlite::{params, Connection, OptionalExtension};
 use tauri::{AppHandle, Emitter, State};
 
 use crate::{
-    auth, crypto::SecretBox, db, models::*, ssh_client,
+    audit, auth, crypto::SecretBox, db, lan, models::*, ssh_client,
 };
 
 pub struct AppState {
@@ -21,11 +22,41 @@ pub struct AppState {
     pub sftps: Mutex<HashMap<String, Arc<russh_sftp::client::SftpSession>>>,
     pub current_user: Mutex<Option<UserInfo>>,
     pub app: AppHandle,
+    /// 本机局域网 IP（启动时探测，登录/访客进入时刷新）
+    pub ip: Mutex<String>,
+    /// 本机设备标识，访客日志与后续局域网互传用它标识来源
+    pub device_id: String,
+    /// 当前访客会话标识（访客进入后有值）
+    pub guest_session: Mutex<Option<String>>,
+    /// 局域网发现与互传
+    pub lan: Arc<lan::LanState>,
 }
 
 impl AppState {
-    pub fn new(conn: Connection, secrets: SecretBox, app: AppHandle) -> Self {
+    pub fn new(
+        conn: Connection,
+        secrets: SecretBox,
+        app: AppHandle,
+        lan: Arc<lan::LanState>,
+    ) -> Self {
         let user = auth::restore_session(&conn);
+        let device_id = db::ensure_device_id(&conn);
+        let ip = crate::net::local_ipv4();
+
+        if let Some(u) = user.as_ref() {
+            let _ = auth::touch_login(&conn, u.id, &ip);
+            audit::record(
+                &conn,
+                Some(u.id),
+                &device_id,
+                &u.username,
+                "login",
+                "自动恢复登录",
+                &ip,
+            );
+            lan.set_identity(&u.username, &ip);
+        }
+
         Self {
             db: Mutex::new(conn),
             secrets,
@@ -33,6 +64,10 @@ impl AppState {
             sftps: Mutex::new(HashMap::new()),
             current_user: Mutex::new(user),
             app,
+            ip: Mutex::new(ip),
+            device_id,
+            guest_session: Mutex::new(None),
+            lan,
         }
     }
 
@@ -54,6 +89,39 @@ impl AppState {
             .unwrap_or_else(|e| e.into_inner())
             .as_ref()
             .map(|u| u.id)
+    }
+
+    pub fn ip(&self) -> String {
+        self.ip.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
+    /// 重新探测本机局域网 IP 并缓存。
+    fn refresh_ip(&self) -> String {
+        let ip = crate::net::local_ipv4();
+        *self.ip.lock().unwrap_or_else(|e| e.into_inner()) = ip.clone();
+        ip
+    }
+
+    /// 写一条操作日志；内部忽略失败，不影响主流程。
+    pub fn audit(&self, action: &str, target: &str) {
+        let (user_id, username) = {
+            let guard = self.current_user.lock().unwrap_or_else(|e| e.into_inner());
+            match guard.as_ref() {
+                Some(u) => (Some(u.id), u.username.clone()),
+                None => (None, "访客".to_string()),
+            }
+        };
+        let ip = self.ip();
+        let conn = self.conn();
+        audit::record(
+            &conn,
+            user_id,
+            &self.device_id,
+            &username,
+            action,
+            target,
+            &ip,
+        );
     }
 
     pub fn session(&self, client_key: &str) -> Option<Arc<ssh_client::SshSession>> {
@@ -265,14 +333,19 @@ pub fn register(
     username: String,
     password: String,
 ) -> Result<UserInfo, String> {
+    let ip = state.refresh_ip();
     let user = {
         let conn = state.conn();
-        auth::register(&conn, &username, &password)?
+        let user = auth::register(&conn, &username, &password)?;
+        let _ = auth::touch_login(&conn, user.id, &ip);
+        user
     };
     *state
         .current_user
         .lock()
         .unwrap_or_else(|e| e.into_inner()) = Some(user.clone());
+    state.lan.set_identity(&user.username, &ip);
+    state.audit("login", "注册并自动登录");
     Ok(user)
 }
 
@@ -282,19 +355,27 @@ pub fn login(
     username: String,
     password: String,
 ) -> Result<UserInfo, String> {
+    let ip = state.refresh_ip();
     let user = {
         let conn = state.conn();
-        auth::login(&conn, &username, &password)?
+        let user = auth::login(&conn, &username, &password)?;
+        let _ = auth::touch_login(&conn, user.id, &ip);
+        user
     };
     *state
         .current_user
         .lock()
         .unwrap_or_else(|e| e.into_inner()) = Some(user.clone());
+    state.lan.set_identity(&user.username, &ip);
+    state.audit("login", "账号登录");
     Ok(user)
 }
 
 #[tauri::command]
 pub fn logout(state: State<'_, AppState>) -> Result<(), String> {
+    if state.current_owner().is_some() {
+        state.audit("logout", "主动退出");
+    }
     {
         let conn = state.conn();
         auth::logout(&conn)?;
@@ -303,7 +384,110 @@ pub fn logout(state: State<'_, AppState>) -> Result<(), String> {
         .current_user
         .lock()
         .unwrap_or_else(|e| e.into_inner()) = None;
+    // 退出后不再对外公告，避免登录界面仍显示为在线可传
+    let ip = state.ip();
+    state.lan.set_identity("", &ip);
     Ok(())
+}
+
+/// 访客进入：记录会话标识与本机 IP，并写一条访客进入日志。
+#[tauri::command]
+pub fn guest_enter(state: State<'_, AppState>) -> Result<String, String> {
+    let ip = state.refresh_ip();
+    *state
+        .guest_session
+        .lock()
+        .unwrap_or_else(|e| e.into_inner()) = Some(state.device_id.clone());
+    state.lan.set_identity("访客", &ip);
+    state.audit("login", "访客进入");
+    Ok(ip)
+}
+
+/// 访客离开：结束本次访客会话并写退出日志。
+#[tauri::command]
+pub fn guest_leave(state: State<'_, AppState>) -> Result<(), String> {
+    let active = state
+        .guest_session
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .take();
+    if active.is_some() {
+        state.audit("logout", "访客离开");
+        let ip = state.ip();
+        state.lan.set_identity("", &ip);
+    }
+    Ok(())
+}
+
+/// 当前本机局域网 IP。
+#[tauri::command]
+pub fn current_ip(state: State<'_, AppState>) -> String {
+    state.ip()
+}
+
+/// 修改当前登录用户的密码（访客不可用）。
+#[tauri::command]
+pub fn change_password(
+    state: State<'_, AppState>,
+    old_password: String,
+    new_password: String,
+) -> Result<(), String> {
+    let user_id = state
+        .current_owner()
+        .ok_or_else(|| "访客模式不支持修改密码".to_string())?;
+    let conn = state.conn();
+    auth::change_password(&conn, user_id, &old_password, &new_password)
+}
+
+/// 读取当前身份的操作日志（时间倒序）：登录用户只看自己，访客只看本机访客记录。
+#[tauri::command]
+pub fn list_audit_logs(
+    state: State<'_, AppState>,
+    limit: Option<u32>,
+) -> Result<Vec<AuditLogItem>, String> {
+    let limit = limit.unwrap_or(500).clamp(1, 2000) as i64;
+    let owner = state.current_owner();
+    let conn = state.conn();
+    let sql = if owner.is_some() {
+        "SELECT id, action, target, ip, username, created_at FROM audit_logs
+         WHERE user_id = ?1 ORDER BY id DESC LIMIT ?2"
+    } else {
+        "SELECT id, action, target, ip, username, created_at FROM audit_logs
+         WHERE user_id IS NULL AND session_id = ?1 ORDER BY id DESC LIMIT ?2"
+    };
+    let mut stmt = conn.prepare(sql).map_err(|e| e.to_string())?;
+    // 登录用户按 user_id 过滤；访客记录写入时以设备标识作为会话标识，这里按同一标识过滤
+    let key = match owner {
+        Some(id) => rusqlite::types::Value::Integer(id),
+        None => rusqlite::types::Value::Text(state.device_id.clone()),
+    };
+    let rows = stmt
+        .query_map(params![key, limit], |row| {
+            Ok(AuditLogItem {
+                id: row.get(0)?,
+                action: row.get(1)?,
+                target: row.get(2)?,
+                ip: row.get(3)?,
+                username: row.get(4)?,
+                created_at: row.get(5)?,
+            })
+        })
+        .map_err(|e| e.to_string())?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())
+}
+
+/// 记录一条终端命令（前端在用户回车后调用），密码形态先脱敏。
+#[tauri::command]
+pub fn log_command(state: State<'_, AppState>, client_key: String, command: String) {
+    let sanitized = audit::sanitize_command(command.trim());
+    if sanitized.is_empty() {
+        return;
+    }
+    let target = match state.session(&client_key) {
+        Some(session) => format!("{}（{}）: {}", session.name, session.host, sanitized),
+        None => format!("未知会话: {sanitized}"),
+    };
+    state.audit("command", &target);
 }
 
 // ---------------------------------------------------------------------------
@@ -579,6 +763,8 @@ pub async fn open_session(
 
     ssh_client::spawn_reader(state.app.clone(), session, established.read);
 
+    state.audit("connect", &format!("{name}（{host}:{port}）"));
+
     Ok(SessionInfo {
         client_key,
         session_id,
@@ -683,4 +869,80 @@ pub fn active_session_count(state: State<'_, AppState>) -> usize {
 #[tauri::command]
 pub fn notify_ready(state: State<'_, AppState>) {
     let _ = state.app.emit("dcx:ready", ());
+}
+
+// ---------------------------------------------------------------------------
+// 局域网互传
+// ---------------------------------------------------------------------------
+
+/// 本机互传状态：显示名、IP、端口、监听是否正常、默认保存目录。
+#[tauri::command]
+pub fn lan_status(state: State<'_, AppState>) -> lan::LanStatus {
+    state.lan.status()
+}
+
+/// 当前在线、可互传的用户。
+#[tauri::command]
+pub fn lan_peers(state: State<'_, AppState>) -> Vec<lan::PeerView> {
+    state.lan.peers()
+}
+
+/// 向指定在线用户发送一个文件，返回传输标识。
+#[tauri::command]
+pub fn lan_send_file(
+    state: State<'_, AppState>,
+    path: String,
+    peer_id: String,
+) -> Result<String, String> {
+    state.lan.spawn_send(path, peer_id)
+}
+
+/// 接收方回应传入的文件请求。
+#[tauri::command]
+pub fn lan_respond(
+    state: State<'_, AppState>,
+    id: String,
+    accept: bool,
+    save_dir: Option<String>,
+) -> Result<(), String> {
+    state.lan.resolve(
+        &id,
+        accept,
+        save_dir.map(std::path::PathBuf::from),
+    )
+}
+
+/// 在系统文件管理器里打开一个本地路径（可指向文件，会自动选中）。
+/// Windows 下调用 `explorer /select,"<path>"`；其他平台用系统默认 open。
+#[tauri::command]
+pub fn open_path(path: String) -> Result<(), String> {
+    let p = PathBuf::from(&path);
+    if !p.exists() {
+        return Err(format!("路径不存在：{path}"));
+    }
+    #[cfg(windows)]
+    {
+        // explorer /select,"<fullpath>" 会自动在资源管理器里定位并选中该文件/目录
+        let arg = format!("/select,\"{}\"", p.display());
+        std::process::Command::new("explorer")
+            .arg(&arg)
+            .spawn()
+            .map_err(|e| format!("无法打开文件管理器：{e}"))?;
+        return Ok(());
+    }
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .arg(&path)
+            .spawn()
+            .map_err(|e| format!("open 失败：{e}"))?;
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        std::process::Command::new("xdg-open")
+            .arg(&path)
+            .spawn()
+            .map_err(|e| format!("xdg-open 失败：{e}"))?;
+    }
+    Ok(())
 }

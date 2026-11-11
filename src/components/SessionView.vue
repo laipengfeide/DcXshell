@@ -45,6 +45,17 @@ let disposed = false
 let reconnecting = false
 let currentSessionId = ""
 
+// ---- 命令审计：只记录用户按回车提交后的整行命令 ----
+let cmdBuffer = ""
+let cmdUnknown = false
+let secretPrompt = false
+let lastCommand = ""
+let outputTail = ""
+
+// sudo / su / ssh / mysql -p / passwd 等交互式密码提示
+const SECRET_PROMPT = /(password|passphrase|passwort|密码|口令)[^:\n]{0,80}[:：]\s*$/i
+const SHELL_PROMPT = /(?:[$#%>»])\s$/
+
 const ctx = reactive({ visible: false, x: 0, y: 0, hasSelection: false })
 const showFiles = ref(false)
 
@@ -111,6 +122,7 @@ function initTerminal() {
   }
 
   term.onData((data) => {
+    trackInput(data)
     api.writeSession(props.sessionKey, data).catch(() => {
       /* 掉线时由心跳统一处理 */
     })
@@ -333,9 +345,155 @@ async function runCtx(action: "copy" | "paste" | "selectAll" | "clear" | "reconn
   if (action === "reconnect") await manualReconnect()
 }
 
+// 逐字符跟踪本地输入，仅在回车时提交整行；粘贴、Ctrl 编辑一并处理。
+function trackInput(data: string) {
+  let i = 0
+  while (i < data.length) {
+    const ch = data[i]
+    const code = data.charCodeAt(i)
+
+    if (ch === "\x1b") {
+      // 跳过 CSI / SS3 序列（方向键、Home/End 等）：历史回填后以屏幕内容为准
+      i++
+      if (data[i] === "[") {
+        i++
+        while (i < data.length && /[0-9;?]/.test(data[i])) i++
+        const final = data[i]
+        i++
+        if (final && "ABCDHF".includes(final)) cmdUnknown = true
+      } else if (data[i] === "O") {
+        i += 2
+        cmdUnknown = true
+      } else if (i < data.length) {
+        i++
+        cmdUnknown = true
+      }
+      continue
+    }
+
+    if (ch === "\r") {
+      submitCommandLine()
+      i++
+      continue
+    }
+    if (ch === "\n") {
+      i++
+      continue
+    }
+
+    if (ch === "\x7f" || ch === "\x08") {
+      if (!secretPrompt) cmdBuffer = cmdBuffer.slice(0, -1)
+      i++
+      continue
+    }
+    if (ch === "\x15") {
+      cmdBuffer = ""
+      cmdUnknown = false
+      i++
+      continue
+    }
+    if (ch === "\x17") {
+      cmdBuffer = cmdBuffer.replace(/\s*\S+\s*$/, "")
+      i++
+      continue
+    }
+    if (ch === "\x03") {
+      cmdBuffer = ""
+      cmdUnknown = false
+      secretPrompt = false
+      i++
+      continue
+    }
+
+    if (code >= 0x20 && ch !== "\x7f" && !secretPrompt) cmdBuffer += ch
+    i++
+  }
+}
+
+function submitCommandLine() {
+  const wasSecret = secretPrompt
+  secretPrompt = false
+
+  const buffered = cmdBuffer
+  const unknown = cmdUnknown
+  cmdBuffer = ""
+  cmdUnknown = false
+
+  if (wasSecret) {
+    const suffix = lastCommand ? `；关联命令：${lastCommand}` : ""
+    sendAudit(`••••••（密码输入，已隐藏${suffix}）`)
+    return
+  }
+
+  let command = buffered
+  if (unknown) {
+    // 方向键回填历史后本地缓冲不再可信，直接取屏幕上光标前的整行
+    const screen = readScreenLine()
+    if (screen) command = screen
+  }
+  command = command.replace(/\s+$/, "")
+  if (!command.trim()) return
+  lastCommand = command
+  sendAudit(command)
+}
+
+function sendAudit(command: string) {
+  api.logCommand(props.sessionKey, command).catch(() => {
+    /* 日志写入失败不影响终端 */
+  })
+}
+
+/** 读取当前光标所在行、光标之前的可见文本（用于方向键回填命令的兜底）。 */
+function readScreenLine(): string {
+  const buffer = term?.buffer.active
+  if (!buffer) return ""
+  const line = buffer.getLine(buffer.baseY + buffer.cursorY)
+  if (!line) return ""
+  const raw = line.translateToString(true).slice(0, buffer.cursorX)
+  return stripPrompt(raw)
+}
+
+function stripPrompt(raw: string): string {
+  const text = raw.replace(/\s+$/, "")
+  let cut = -1
+  for (const mark of ["$ ", "# ", "% ", "> ", "» "]) {
+    cut = Math.max(cut, text.lastIndexOf(mark))
+  }
+  const body = cut >= 0 ? text.slice(cut + 2).trim() : text.trim()
+  return body
+}
+
+/** 监听远端输出，识别「正在等待输入密码」的状态。 */
+function scanOutput(data: string) {
+  if (!data) return
+  const plain = data
+    .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, "")
+    .replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, "")
+    .replace(/\x1b[()][A-Za-z0-9]/g, "")
+  outputTail = (outputTail + plain).slice(-400)
+
+  let probe = outputTail
+  const typed = cmdBuffer.trim()
+  if (typed) {
+    const trimmed = probe.trimEnd()
+    if (trimmed.endsWith(typed)) probe = trimmed.slice(0, trimmed.length - typed.length)
+  }
+
+  if (SECRET_PROMPT.test(probe)) {
+    secretPrompt = true
+    cmdBuffer = ""
+    return
+  }
+  if (secretPrompt && SHELL_PROMPT.test(probe)) {
+    // 已回到普通 shell 提示符，退出密码态
+    secretPrompt = false
+  }
+}
+
 async function bindSessionEvents() {
   unOutput = await listen<SessionOutputEvent>("dcx:output", (event) => {
     if (disposed || event.payload.clientKey !== props.sessionKey) return
+    scanOutput(event.payload.data)
     try {
       term?.write(event.payload.data)
     } catch {

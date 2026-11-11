@@ -38,6 +38,7 @@
       "icons/icon.ico"
     ],
     "shortDescription": "Dc Xshell SSH 终端",
-    "longDescription": "面向运维、测试与研发人员的轻量 SSH 终端客户端，无需 USB Key 即可登录服务器。"
+    "longDescription": "面向运维、测试与研发人员的轻量 SSH 终端客户端，支持局域网内登录用户之间的 4GB 以内流式文件互传。",
+    "copyright": "Copyright © 2026 Dc Xshell"
   }
 }

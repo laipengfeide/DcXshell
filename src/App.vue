@@ -26,13 +26,26 @@ function onLoginSuccess(user: UserInfo) {
   stage.value = "workspace"
 }
 
-function enterGuest() {
+async function enterGuest() {
   appState.user = null
+  // 访客进入也登记会话与 IP，便于后续局域网互传与日志归属
+  try {
+    await api.guestEnter()
+  } catch {
+    /* 日志/会话登记失败不阻塞进入 */
+  }
   canBack.value = false
   stage.value = "workspace"
 }
 
-function requestLogin() {
+async function requestLogin() {
+  if (appState.user === null) {
+    try {
+      await api.guestLeave()
+    } catch {
+      /* ignore */
+    }
+  }
   canBack.value = true
   stage.value = "login"
 }

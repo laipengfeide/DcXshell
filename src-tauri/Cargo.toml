@@ -2,7 +2,7 @@
 name = "dc-xshell"
 version = "1.0.0"
 description = "Dc Xshell - 无需 USB Key 的 SSH 终端客户端"
-authors = ["Dc Xshell"]
+authors = ["Dc Xshell <dev@dcxshell.local>"]
 edition = "2021"
 default-run = "dc-xshell"
 
@@ -28,6 +28,14 @@ uuid = { version = "1", features = ["v4"] }
 chrono = "0.4"
 thiserror = "1"
 bytes = "1"
+sha2 = "0.10"
 
 [features]
 custom-protocol = ["tauri/custom-protocol"]
+# 本地 SSH 测试服务（src/bin/sshtest.rs）仅在显式开启该 feature 时构建，避免随安装包分发
+test-server = []
+
+[[bin]]
+name = "sshtest"
+path = "src/bin/sshtest.rs"
+required-features = ["test-server"]

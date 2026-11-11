@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from "vue"
-import { Search, Plus, Refresh } from "@element-plus/icons-vue"
+import { Search, Plus, Refresh, Clock, Share } from "@element-plus/icons-vue"
 import { ElTree } from "element-plus"
 import type { ConnectionItem, SessionStatus, UserInfo } from "@/types"
 
@@ -27,6 +27,9 @@ const emit = defineEmits<{
   refresh: []
   loginRequest: []
   logout: []
+  logs: []
+  transfer: []
+  changePassword: []
 }>()
 
 const keyword = ref("")
@@ -71,6 +74,20 @@ const menu = reactive({
   conn: null as ConnectionItem | null,
 })
 
+/** 左下角账号菜单 */
+const acctMenu = reactive({ visible: false })
+
+function toggleAcctMenu() {
+  acctMenu.visible = !acctMenu.visible
+  menu.visible = false
+}
+
+function pickAcct(action: "password" | "logs") {
+  acctMenu.visible = false
+  if (action === "password") emit("changePassword")
+  if (action === "logs") emit("logs")
+}
+
 function onNodeClick(node: TreeNode) {
   if (node.isGroup) {
     const treeNode = treeRef.value?.getNode(node.id as any)
@@ -92,6 +109,7 @@ function openMenu(event: MouseEvent, conn: ConnectionItem) {
 
 function closeMenu() {
   menu.visible = false
+  acctMenu.visible = false
 }
 
 function runMenu(action: "open" | "edit" | "remove") {
@@ -136,10 +154,23 @@ onBeforeUnmount(() => document.removeEventListener("click", closeMenu))
         clearable
       />
 
-      <button class="new-btn" @click="emit('new')">
-        <el-icon><Plus /></el-icon>
-        新建连接
-      </button>
+      <!-- 主工具栏：新建连接独占一行，其余功能放在第二行，后续继续追加不会挤在一起 -->
+      <div class="side-actions">
+        <button class="new-btn" @click="emit('new')">
+          <el-icon><Plus /></el-icon>
+          新建连接
+        </button>
+        <div class="side-tools">
+          <button class="tool-btn" title="查看我的操作日志" @click="emit('logs')">
+            <el-icon><Clock /></el-icon>
+            操作日志
+          </button>
+          <button class="tool-btn accent" title="局域网内互传文件" @click="emit('transfer')">
+            <el-icon><Share /></el-icon>
+            互传文件
+          </button>
+        </div>
+      </div>
     </div>
 
     <div class="side-tree">
@@ -182,17 +213,24 @@ onBeforeUnmount(() => document.removeEventListener("click", closeMenu))
       </el-tree>
     </div>
 
-    <div class="side-foot">
-      <div class="avatar" :class="{ guest: !user }">{{ initials }}</div>
-      <div class="who">
-        <div class="uname">{{ user ? user.username : "访客模式" }}</div>
-        <div class="umeta">
-          <span v-if="user" class="unlimited">已登录 · 无限窗口</span>
-          <span v-else>并行窗口 {{ openedCount }} / 3</span>
-        </div>
-      </div>
+    <div class="side-foot" @click.stop>
+      <button class="avatar-btn" :title="user ? '账号菜单' : '访客菜单'" @click="toggleAcctMenu">
+        <span class="avatar" :class="{ guest: !user }">{{ initials }}</span>
+        <span class="who">
+          <span class="uname">{{ user ? user.username : "访客模式" }}</span>
+          <span class="umeta">
+            <span v-if="user" class="unlimited">已登录 · 无限窗口</span>
+            <span v-else>并行窗口 {{ openedCount }} / 3</span>
+          </span>
+        </span>
+      </button>
       <button v-if="user" class="acct-btn" @click="emit('logout')">退出</button>
       <button v-else class="acct-btn accent" @click="emit('loginRequest')">登录</button>
+
+      <div v-if="acctMenu.visible" class="acct-menu" @click.stop>
+        <button v-if="user" @click="pickAcct('password')">修改密码</button>
+        <button @click="pickAcct('logs')">操作日志</button>
+      </div>
     </div>
 
     <div
@@ -267,6 +305,17 @@ onBeforeUnmount(() => document.removeEventListener("click", closeMenu))
   margin-bottom: 9px;
 }
 
+.side-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.side-tools {
+  display: flex;
+  gap: 8px;
+}
+
 .new-btn {
   width: 100%;
   height: 36px;
@@ -282,6 +331,7 @@ onBeforeUnmount(() => document.removeEventListener("click", closeMenu))
   font-weight: 600;
   cursor: pointer;
   transition: all 0.18s ease;
+  white-space: nowrap;
 }
 
 .new-btn:hover {
@@ -289,6 +339,42 @@ onBeforeUnmount(() => document.removeEventListener("click", closeMenu))
   background: rgba(45, 212, 191, 0.16);
   color: #d6fff9;
   box-shadow: 0 0 22px rgba(45, 212, 191, 0.12);
+}
+
+.tool-btn {
+  flex: 1;
+  height: 33px;
+  padding: 0 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  border-radius: 9px;
+  border: 1px solid #24343e;
+  background: #0e181e;
+  color: #a8c1cc;
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.18s ease;
+  white-space: nowrap;
+}
+
+.tool-btn:hover {
+  border-color: rgba(45, 212, 191, 0.4);
+  color: #dcfffa;
+  background: #12212a;
+}
+
+.tool-btn.accent {
+  border-color: rgba(56, 189, 248, 0.32);
+  background: rgba(56, 189, 248, 0.08);
+  color: #a8d8f7;
+}
+
+.tool-btn.accent:hover {
+  border-color: rgba(56, 189, 248, 0.6);
+  background: rgba(56, 189, 248, 0.14);
+  color: #dcf1ff;
 }
 
 .side-tree {
@@ -429,13 +515,34 @@ onBeforeUnmount(() => document.removeEventListener("click", closeMenu))
 }
 
 .side-foot {
+  position: relative;
   flex: 0 0 auto;
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   padding: 11px 12px;
   border-top: 1px solid var(--border);
   background: #0a1116;
+}
+
+.avatar-btn {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 3px 5px;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.avatar-btn:hover {
+  background: #101c23;
+  border-color: #1f303a;
 }
 
 .avatar {
@@ -459,6 +566,9 @@ onBeforeUnmount(() => document.removeEventListener("click", closeMenu))
 .who {
   min-width: 0;
   flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
 }
 
 .uname {
@@ -472,11 +582,41 @@ onBeforeUnmount(() => document.removeEventListener("click", closeMenu))
 .umeta {
   font-size: 10.5px;
   color: var(--text-mute);
-  margin-top: 2px;
 }
 
 .unlimited {
   color: #4ecdc0;
+}
+
+.acct-menu {
+  position: absolute;
+  left: 12px;
+  bottom: calc(100% - 2px);
+  z-index: 9998;
+  min-width: 142px;
+  padding: 4px;
+  border-radius: 9px;
+  background: #101b22;
+  border: 1px solid #263842;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.55);
+}
+
+.acct-menu button {
+  display: block;
+  width: 100%;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #b7c9d3;
+  font-size: 12.5px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.acct-menu button:hover {
+  background: #17262f;
+  color: #e6f4fb;
 }
 
 .acct-btn {

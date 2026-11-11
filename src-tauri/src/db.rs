@@ -6,7 +6,9 @@ CREATE TABLE IF NOT EXISTS users (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
     username      TEXT NOT NULL UNIQUE,
     password_hash TEXT NOT NULL,
-    created_at    TEXT NOT NULL
+    created_at    TEXT NOT NULL,
+    last_ip       TEXT,
+    last_login_at TEXT
 );
 
 CREATE TABLE IF NOT EXISTS connections (
@@ -30,6 +32,20 @@ CREATE TABLE IF NOT EXISTS settings (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
+
+-- 操作日志：user_id 为 NULL 时表示访客，用 session_id（本机设备标识）区分
+CREATE TABLE IF NOT EXISTS audit_logs (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id    INTEGER,
+    session_id TEXT NOT NULL DEFAULT '',
+    username   TEXT NOT NULL DEFAULT '',
+    action     TEXT NOT NULL,
+    target     TEXT NOT NULL DEFAULT '',
+    ip         TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_audit_logs_owner ON audit_logs(user_id, session_id, id DESC);
 "#;
 
 pub fn open(path: &Path) -> rusqlite::Result<Connection> {
@@ -40,7 +56,37 @@ pub fn open(path: &Path) -> rusqlite::Result<Connection> {
     conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")?;
     conn.execute_batch(SCHEMA)?;
     migrate_connection_owner(&conn)?;
+    migrate_user_columns(&conn)?;
     Ok(conn)
+}
+
+/// 为历史数据库补充 users.last_ip / users.last_login_at 列。
+fn migrate_user_columns(conn: &Connection) -> rusqlite::Result<()> {
+    let mut stmt = conn.prepare("PRAGMA table_info(users)")?;
+    let columns = stmt
+        .query_map([], |row| row.get::<_, String>(1))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    drop(stmt);
+
+    if !columns.iter().any(|c| c == "last_ip") {
+        conn.execute("ALTER TABLE users ADD COLUMN last_ip TEXT", [])?;
+    }
+    if !columns.iter().any(|c| c == "last_login_at") {
+        conn.execute("ALTER TABLE users ADD COLUMN last_login_at TEXT", [])?;
+    }
+    Ok(())
+}
+
+/// 本机设备标识：首次启动生成后持久化，用于访客日志归属与后续局域网互传。
+pub fn ensure_device_id(conn: &Connection) -> String {
+    if let Some(id) = get_setting(conn, "device_id") {
+        if !id.trim().is_empty() {
+            return id;
+        }
+    }
+    let id = uuid::Uuid::new_v4().to_string();
+    let _ = set_setting(conn, "device_id", &id);
+    id
 }
 
 /// 为历史数据库补充 connections.owner_id 列（NULL 表示访客创建）。

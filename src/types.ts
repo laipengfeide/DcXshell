@@ -100,3 +100,52 @@ export interface TransferEvent {
   done: boolean
 }
 
+export type AuditAction = "login" | "logout" | "connect" | "command"
+
+export interface AuditLogItem {
+  id: number
+  action: AuditAction
+  target: string
+  ip: string
+  username: string
+  createdAt: string
+}
+
+export interface LanPeer {
+  id: string
+  name: string
+  ip: string
+  port: number
+}
+
+export interface LanStatus {
+  name: string
+  ip: string
+  port: number
+  listening: boolean
+  saveDir: string
+}
+
+export interface LanIncomingEvent {
+  id: string
+  from: string
+  ip: string
+  fileName: string
+  size: number
+}
+
+export type LanTransferStatus = "waiting" | "active" | "done" | "failed" | "declined"
+
+export interface LanTransferEvent {
+  id: string
+  direction: "send" | "receive"
+  peer: string
+  fileName: string
+  total: number
+  transferred: number
+  status: LanTransferStatus
+  message: string
+  /** 仅 receive + done 时有值，接收方落盘的绝对路径 */
+  path?: string
+}
+

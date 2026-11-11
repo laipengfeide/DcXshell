@@ -1,0 +1,5 @@
+# 静态链接 C 运行时，让生成的 exe 不再依赖目标机器上的 VC++ Redistributable。
+# 这样复制 exe 到另一台没装运行时的 Windows 上也能直接双击运行。
+# 注意：静态 CRT 会让 exe 体积增加几 MB，但项目不使用自定义系统 DLL，交互都是 Tauri 自己提供的，无风险。
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]

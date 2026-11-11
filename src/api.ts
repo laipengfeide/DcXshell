@@ -1,8 +1,11 @@
 import { invoke } from "@tauri-apps/api/core"
 import type {
+  AuditLogItem,
   ConnectionInput,
   ConnectionItem,
   DirListing,
+  LanPeer,
+  LanStatus,
   PingResult,
   SessionInfo,
   TestResult,
@@ -16,6 +19,15 @@ export const register = (username: string, password: string) =>
 export const login = (username: string, password: string) =>
   invoke<UserInfo>("login", { username, password })
 export const logout = () => invoke<void>("logout")
+export const guestEnter = () => invoke<string>("guest_enter")
+export const guestLeave = () => invoke<void>("guest_leave")
+export const currentIp = () => invoke<string>("current_ip")
+export const changePassword = (oldPassword: string, newPassword: string) =>
+  invoke<void>("change_password", { oldPassword, newPassword })
+export const listAuditLogs = (limit = 500) =>
+  invoke<AuditLogItem[]>("list_audit_logs", { limit })
+export const logCommand = (clientKey: string, command: string) =>
+  invoke<void>("log_command", { clientKey, command })
 
 export const listConnections = () => invoke<ConnectionItem[]>("list_connections")
 export const saveConnection = (input: ConnectionInput) =>
@@ -53,3 +65,12 @@ export const sftpCopy = (
 ) => invoke<TransferResult>("sftp_copy", { clientKey, sourcePath, targetDir, policy })
 export const sftpExtract = (clientKey: string, remotePath: string, mode: "here" | "folder") =>
   invoke<string>("sftp_extract", { clientKey, remotePath, mode })
+
+export const lanStatus = () => invoke<LanStatus>("lan_status")
+export const lanPeers = () => invoke<LanPeer[]>("lan_peers")
+export const lanSendFile = (path: string, peerId: string) =>
+  invoke<string>("lan_send_file", { path, peerId })
+export const lanRespond = (id: string, accept: boolean, saveDir?: string | null) =>
+  invoke<void>("lan_respond", { id, accept, saveDir: saveDir ?? null })
+
+export const openPath = (path: string) => invoke<void>("open_path", { path })

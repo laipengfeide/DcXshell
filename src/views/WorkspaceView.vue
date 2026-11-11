@@ -4,6 +4,9 @@ import { ElMessage, ElMessageBox } from "element-plus"
 import Sidebar from "@/components/Sidebar.vue"
 import SessionView from "@/components/SessionView.vue"
 import ConnectionDialog from "@/components/ConnectionDialog.vue"
+import AuditLogView from "@/components/AuditLogView.vue"
+import ChangePasswordDialog from "@/components/ChangePasswordDialog.vue"
+import TransferPanel from "@/components/TransferPanel.vue"
 import * as api from "@/api"
 import { appState, GUEST_LIMIT } from "@/store"
 import type { ConnectionItem, SessionStatus } from "@/types"
@@ -28,6 +31,9 @@ const tabs = ref<Tab[]>([])
 const activeKey = ref("")
 const dialogVisible = ref(false)
 const editing = ref<ConnectionItem | null>(null)
+const logsVisible = ref(false)
+const passwordVisible = ref(false)
+const transferVisible = ref(false)
 
 const onlineCount = computed(() => tabs.value.filter((t) => t.status === "online").length)
 
@@ -180,6 +186,9 @@ onMounted(refreshConnections)
       @refresh="refreshConnections"
       @login-request="emit('loginRequest')"
       @logout="handleLogout"
+      @logs="logsVisible = true"
+      @transfer="transferVisible = true"
+      @change-password="passwordVisible = true"
     />
 
     <main class="main">
@@ -243,6 +252,13 @@ onMounted(refreshConnections)
                 </svg>
                 新建连接
               </button>
+              <button class="ghost-btn" @click="logsVisible = true">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
+                  <circle cx="12" cy="12" r="8.4" stroke="currentColor" stroke-width="1.6" />
+                  <path d="M12 7.5V12l3 2" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
+                </svg>
+                操作日志
+              </button>
               <span v-if="appState.user === null" class="w-note">
                 访客模式 · 最多 {{ GUEST_LIMIT }} 个并行窗口
               </span>
@@ -304,6 +320,8 @@ onMounted(refreshConnections)
           </div>
         </div>
       </div>
+
+      <AuditLogView v-if="logsVisible" @close="logsVisible = false" />
     </main>
 
     <ConnectionDialog
@@ -311,6 +329,11 @@ onMounted(refreshConnections)
       :editing="editing"
       @saved="onSaved"
     />
+
+    <ChangePasswordDialog v-model:visible="passwordVisible" />
+
+    <!-- 常驻挂载：面板关闭时也能监听传入文件请求 -->
+    <TransferPanel v-model:visible="transferVisible" />
   </div>
 </template>
 
@@ -323,6 +346,7 @@ onMounted(refreshConnections)
 }
 
 .main {
+  position: relative;
   flex: 1;
   min-width: 0;
   display: flex;
@@ -547,6 +571,27 @@ onMounted(refreshConnections)
   background: rgba(45, 212, 191, 0.25);
   color: #e8fffb;
   box-shadow: 0 0 28px rgba(45, 212, 191, 0.16);
+}
+
+.ghost-btn {
+  height: 38px;
+  padding: 0 16px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  border-radius: 9px;
+  border: 1px solid #263842;
+  background: #0d171d;
+  color: #b3c9d3;
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.18s ease;
+}
+
+.ghost-btn:hover {
+  border-color: rgba(45, 212, 191, 0.42);
+  color: #e2fffb;
+  background: #12212a;
 }
 
 .w-note {

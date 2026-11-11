@@ -72,3 +72,14 @@ pub struct PingResult {
     pub latency_ms: u64,
     pub message: Option<String>,
 }
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AuditLogItem {
+    pub id: i64,
+    pub action: String,
+    pub target: String,
+    pub ip: String,
+    pub username: String,
+    pub created_at: String,
+}

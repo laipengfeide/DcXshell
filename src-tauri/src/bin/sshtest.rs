@@ -23,6 +23,9 @@ struct TestHandler {
     channel: Option<ChannelId>,
     streaming: Arc<AtomicBool>,
     input: String,
+    expect_password: bool,
+    history: Vec<String>,
+    history_pos: usize,
 }
 
 impl server::Handler for TestHandler {
@@ -75,12 +78,56 @@ impl server::Handler for TestHandler {
     ) -> Result<(), Self::Error> {
         // 逐字节缓冲，收到回车后把整行当作一条命令执行
         let mut echo = String::new();
-        for &byte in data {
+        let mut i = 0;
+        while i < data.len() {
+            let byte = data[i];
+            // 处理方向键（上下键回溯历史），模拟真实 shell 的回填行为
+            if byte == 0x1b && i + 2 < data.len() && data[i + 1] == b'[' {
+                let final_byte = data[i + 2];
+                i += 3;
+                if !echo.is_empty() {
+                    let _ = session.data(channel, echo.clone());
+                    echo.clear();
+                }
+                match final_byte {
+                    b'A' | b'B' => {
+                        if final_byte == b'A' {
+                            if self.history_pos > 0 {
+                                self.history_pos -= 1;
+                            }
+                        } else if self.history_pos < self.history.len() {
+                            self.history_pos += 1;
+                        }
+                        let recalled = self.history.get(self.history_pos).cloned().unwrap_or_default();
+                        self.input = recalled.clone();
+                        let _ = session.data(
+                            channel,
+                            format!("\r\x1b[Ktester@demo:~$ {recalled}"),
+                        );
+                    }
+                    _ => {}
+                }
+                continue;
+            }
+            i += 1;
             match byte {
                 b'\r' | b'\n' => {
-                    echo.push_str("\r\n");
                     let line = self.input.trim().to_string();
                     self.input.clear();
+                    if self.expect_password {
+                        // 模拟 sudo 密码校验：不回显输入内容
+                        self.expect_password = false;
+                        let _ = session.data(
+                            channel,
+                            "\r\n密码正确，已获得模拟 root 权限。\r\ntester@demo:~# ".to_string(),
+                        );
+                        continue;
+                    }
+                    if !line.is_empty() {
+                        self.history.push(line.clone());
+                        self.history_pos = self.history.len();
+                    }
+                    echo.push_str("\r\n");
                     if !echo.is_empty() {
                         let _ = session.data(channel, echo.clone());
                         echo.clear();
@@ -89,16 +136,20 @@ impl server::Handler for TestHandler {
                 }
                 0x03 => {
                     self.input.clear();
+                    self.expect_password = false;
                     let _ = session.data(channel, "^C\r\ntester@demo:~$ ");
                 }
                 0x7f | 0x08 => {
-                    if self.input.pop().is_some() {
+                    if self.input.pop().is_some() && !self.expect_password {
                         echo.push_str("\x08 \x08");
                     }
                 }
                 b if b >= 0x20 => {
                     self.input.push(b as char);
-                    echo.push(b as char);
+                    // 密码提示期间不回显
+                    if !self.expect_password {
+                        echo.push(b as char);
+                    }
                 }
                 _ => {}
             }
@@ -166,6 +217,11 @@ impl TestHandler {
                     }
                 });
             }
+            other if other.starts_with("sudo") => {
+                // 模拟 sudo 交互式密码提示
+                self.expect_password = true;
+                let _ = session.data(channel, "\r\n[sudo] password for tester: ");
+            }
             other => {
                 let _ = session.data(
                     channel,
@@ -187,6 +243,9 @@ impl server::Server for TestServer {
             channel: None,
             streaming: Arc::new(AtomicBool::new(false)),
             input: String::new(),
+            expect_password: false,
+            history: Vec::new(),
+            history_pos: 0,
         }
     }
 }
