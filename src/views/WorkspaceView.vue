@@ -6,9 +6,11 @@ import SessionView from "@/components/SessionView.vue"
 import ConnectionDialog from "@/components/ConnectionDialog.vue"
 import AuditLogView from "@/components/AuditLogView.vue"
 import ChangePasswordDialog from "@/components/ChangePasswordDialog.vue"
+import SettingsView from "@/components/SettingsView.vue"
 import TransferPanel from "@/components/TransferPanel.vue"
 import * as api from "@/api"
 import { appState, GUEST_LIMIT } from "@/store"
+import { t, tErr } from "@/i18n"
 import type { ConnectionItem, SessionStatus } from "@/types"
 
 interface Tab {
@@ -33,6 +35,7 @@ const dialogVisible = ref(false)
 const editing = ref<ConnectionItem | null>(null)
 const logsVisible = ref(false)
 const passwordVisible = ref(false)
+const settingsVisible = ref(false)
 const transferVisible = ref(false)
 
 const onlineCount = computed(() => tabs.value.filter((t) => t.status === "online").length)
@@ -58,7 +61,7 @@ async function refreshConnections() {
   try {
     appState.connections = await api.listConnections()
   } catch (err) {
-    ElMessage.error(`读取连接列表失败：${err}`)
+    ElMessage.error(t("ws.err.load_connections", { error: tErr(err) }))
   }
 }
 
@@ -79,11 +82,11 @@ async function openConnection(conn: ConnectionItem) {
   if (appState.user === null && tabs.value.length >= GUEST_LIMIT) {
     try {
       await ElMessageBox.confirm(
-        `访客模式最多同时打开 ${GUEST_LIMIT} 个并行窗口，登录后可无限打开。`,
-        "窗口数量已达上限",
+        t("ws.limit.message", { limit: GUEST_LIMIT }),
+        t("ws.limit.title"),
         {
-          confirmButtonText: "去登录",
-          cancelButtonText: "知道了",
+          confirmButtonText: t("ws.limit.confirm"),
+          cancelButtonText: t("ws.limit.cancel"),
           type: "warning",
         }
       )
@@ -142,9 +145,13 @@ async function onSaved() {
 async function removeConnection(conn: ConnectionItem) {
   try {
     await ElMessageBox.confirm(
-      `确定删除连接「${conn.name}」吗？本地保存的配置与密码将一并删除。`,
-      "删除连接",
-      { confirmButtonText: "删除", cancelButtonText: "取消", type: "warning" }
+      t("ws.delete.message", { name: conn.name }),
+      t("ws.delete.title"),
+      {
+        confirmButtonText: t("ws.delete.confirm"),
+        cancelButtonText: t("ws.delete.cancel"),
+        type: "warning",
+      }
     )
   } catch {
     return
@@ -154,9 +161,9 @@ async function removeConnection(conn: ConnectionItem) {
     const keys = tabs.value.filter((t) => t.connectionId === conn.id).map((t) => t.key)
     for (const key of keys) closeTab(key)
     await refreshConnections()
-    ElMessage.success("连接已删除")
+    ElMessage.success(t("ws.delete.success"))
   } catch (err) {
-    ElMessage.error(String(err))
+    ElMessage.error(tErr(err))
   }
 }
 
@@ -165,7 +172,7 @@ async function handleLogout() {
     await api.logout()
     emit("logout")
   } catch (err) {
-    ElMessage.error(String(err))
+    ElMessage.error(tErr(err))
   }
 }
 
@@ -189,6 +196,7 @@ onMounted(refreshConnections)
       @logs="logsVisible = true"
       @transfer="transferVisible = true"
       @change-password="passwordVisible = true"
+      @settings="settingsVisible = true"
     />
 
     <main class="main">
@@ -203,8 +211,8 @@ onMounted(refreshConnections)
           >
             <span class="t-dot" :class="tab.status"></span>
             <span class="t-name">{{ tab.name }}</span>
-            <span v-if="tab.status === 'offline'" class="t-tag">掉线</span>
-            <button class="t-close" title="关闭窗口" @click.stop="closeTab(tab.key)">
+            <span v-if="tab.status === 'offline'" class="t-tag">{{ t("ws.tab.offline") }}</span>
+            <button class="t-close" :title="t('ws.tab.close')" @click.stop="closeTab(tab.key)">
               <svg width="10" height="10" viewBox="0 0 10 10">
                 <path d="M1.5 1.5l7 7M8.5 1.5l-7 7" stroke="currentColor" stroke-width="1.3" />
               </svg>
@@ -213,8 +221,11 @@ onMounted(refreshConnections)
         </div>
         <div class="tabbar-right">
           <span class="win-count">
-            窗口 {{ tabs.length }}<template v-if="appState.user"> · 无限</template>
-            <template v-else> / {{ GUEST_LIMIT }}</template>
+            {{
+              appState.user
+                ? t("ws.tab.win_count_unlimited", { count: tabs.length })
+                : t("ws.tab.win_count_limited", { count: tabs.length, limit: GUEST_LIMIT })
+            }}
           </span>
         </div>
       </div>
@@ -239,58 +250,57 @@ onMounted(refreshConnections)
 
         <div v-else class="welcome">
           <div class="w-hero">
-            <div class="w-eyebrow">SSH WORKSPACE</div>
-            <h1>连接你的服务器</h1>
+            <div class="w-eyebrow">{{ t("ws.welcome.eyebrow") }}</div>
+            <h1>{{ t("ws.welcome.title") }}</h1>
             <p>
-              从左侧连接树选择服务器，或使用下方快速入口。掉线会自动重连 3 次，
-              仍失败时卡片将变红提示。
+              {{ t("ws.welcome.desc") }}
             </p>
             <div class="w-actions">
               <button class="primary-btn" @click="openNew">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
                   <path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="1.8" />
                 </svg>
-                新建连接
+                {{ t("ws.welcome.new") }}
               </button>
               <button class="ghost-btn" @click="logsVisible = true">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
                   <circle cx="12" cy="12" r="8.4" stroke="currentColor" stroke-width="1.6" />
                   <path d="M12 7.5V12l3 2" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
                 </svg>
-                操作日志
+                {{ t("ws.welcome.logs") }}
               </button>
               <span v-if="appState.user === null" class="w-note">
-                访客模式 · 最多 {{ GUEST_LIMIT }} 个并行窗口
+                {{ t("ws.welcome.guest_note", { limit: GUEST_LIMIT }) }}
               </span>
-              <button v-else class="w-note link" @click="emit('loginRequest')">账号已登录 · 无限窗口</button>
+              <button v-else class="w-note link" @click="emit('loginRequest')">{{ t("ws.welcome.logged_in") }}</button>
             </div>
           </div>
 
           <div class="w-stats">
             <div class="stat">
-              <span class="label">连接配置</span>
+              <span class="label">{{ t("ws.stat.connections") }}</span>
               <span class="value">{{ appState.connections.length }}</span>
             </div>
             <div class="stat">
-              <span class="label">并行窗口</span>
+              <span class="label">{{ t("ws.stat.windows") }}</span>
               <span class="value">{{ tabs.length }}</span>
             </div>
             <div class="stat">
-              <span class="label">在线会话</span>
+              <span class="label">{{ t("ws.stat.online") }}</span>
               <span class="value teal">{{ onlineCount }}</span>
             </div>
             <div class="stat">
-              <span class="label">账号状态</span>
-              <span class="value small">{{ appState.user ? appState.user.username : "访客" }}</span>
+              <span class="label">{{ t("ws.stat.account") }}</span>
+              <span class="value small">{{ appState.user ? appState.user.username : t("guest") }}</span>
             </div>
           </div>
 
           <div class="w-section">
-            <span>快速连接</span>
+            <span>{{ t("ws.quick.title") }}</span>
             <span class="w-hint" v-if="appState.connections.length === 0">
-              还没有连接，点击「新建连接」开始
+              {{ t("ws.quick.empty_hint") }}
             </span>
-            <span class="w-hint" v-else>点击卡片即可打开终端</span>
+            <span class="w-hint" v-else>{{ t("ws.quick.hint") }}</span>
           </div>
 
           <div v-if="appState.connections.length" class="quick-grid">
@@ -303,7 +313,7 @@ onMounted(refreshConnections)
               <div class="q-top">
                 <span class="q-dot" :class="statusByConnection[conn.id] || 'idle'"></span>
                 <span class="q-group">{{ conn.groupName }}</span>
-                <button class="q-edit" title="编辑" @click.stop="openEdit(conn)">
+                <button class="q-edit" :title="t('ws.quick.edit')" @click.stop="openEdit(conn)">
                   <svg width="13" height="13" viewBox="0 0 24 24" fill="none">
                     <path d="M4 20h4l10-10-4-4L4 16v4z" stroke="currentColor" stroke-width="1.5" />
                     <path d="M14 6l4 4" stroke="currentColor" stroke-width="1.5" />
@@ -313,8 +323,8 @@ onMounted(refreshConnections)
               <h3>{{ conn.name }}</h3>
               <p class="q-host">{{ conn.username }}@{{ conn.host }}:{{ conn.port }}</p>
               <div class="q-foot">
-                <span>{{ conn.authType === "key" ? "私钥认证" : "密码认证" }}</span>
-                <span class="q-enter">打开 →</span>
+                <span>{{ conn.authType === "key" ? t("ws.quick.auth_key") : t("ws.quick.auth_password") }}</span>
+                <span class="q-enter">{{ t("ws.quick.open") }}</span>
               </div>
             </div>
           </div>
@@ -322,6 +332,7 @@ onMounted(refreshConnections)
       </div>
 
       <AuditLogView v-if="logsVisible" @close="logsVisible = false" />
+      <SettingsView v-if="settingsVisible" @close="settingsVisible = false" />
     </main>
 
     <ConnectionDialog

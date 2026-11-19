@@ -2,6 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from "vue"
 import { Search, Plus, Refresh, Clock, Share } from "@element-plus/icons-vue"
 import { ElTree } from "element-plus"
+import { t } from "@/i18n"
 import type { ConnectionItem, SessionStatus, UserInfo } from "@/types"
 
 interface TreeNode {
@@ -30,6 +31,7 @@ const emit = defineEmits<{
   logs: []
   transfer: []
   changePassword: []
+  settings: []
 }>()
 
 const keyword = ref("")
@@ -50,7 +52,11 @@ const filtered = computed(() => {
 const treeData = computed<TreeNode[]>(() => {
   const groups = new Map<string, TreeNode[]>()
   for (const conn of filtered.value) {
-    const groupName = conn.groupName || "默认分组"
+    const rawGroup = conn.groupName?.trim()
+    const groupName =
+      !rawGroup || rawGroup === "默认分组" || rawGroup === "Default group"
+        ? t("sidebar.group.default")
+        : rawGroup
     if (!groups.has(groupName)) groups.set(groupName, [])
     groups.get(groupName)!.push({
       id: `conn-${conn.id}`,
@@ -82,10 +88,11 @@ function toggleAcctMenu() {
   menu.visible = false
 }
 
-function pickAcct(action: "password" | "logs") {
+function pickAcct(action: "password" | "logs" | "settings") {
   acctMenu.visible = false
   if (action === "password") emit("changePassword")
   if (action === "logs") emit("logs")
+  if (action === "settings") emit("settings")
 }
 
 function onNodeClick(node: TreeNode) {
@@ -138,9 +145,9 @@ onBeforeUnmount(() => document.removeEventListener("click", closeMenu))
   <aside class="sidebar">
     <div class="side-top">
       <div class="side-title">
-        <span>连接</span>
+        <span>{{ t("sidebar.title") }}</span>
         <span class="count">{{ connections.length }}</span>
-        <button class="icon-btn" title="刷新连接列表" @click="emit('refresh')">
+        <button class="icon-btn" :title="t('sidebar.refresh.title')" @click="emit('refresh')">
           <el-icon><Refresh /></el-icon>
         </button>
       </div>
@@ -149,7 +156,7 @@ onBeforeUnmount(() => document.removeEventListener("click", closeMenu))
         v-model="keyword"
         class="search"
         size="default"
-        placeholder="搜索名称 / 主机 / 用户"
+        :placeholder="t('sidebar.search.placeholder')"
         :prefix-icon="Search"
         clearable
       />
@@ -158,16 +165,16 @@ onBeforeUnmount(() => document.removeEventListener("click", closeMenu))
       <div class="side-actions">
         <button class="new-btn" @click="emit('new')">
           <el-icon><Plus /></el-icon>
-          新建连接
+          {{ t("sidebar.new") }}
         </button>
         <div class="side-tools">
-          <button class="tool-btn" title="查看我的操作日志" @click="emit('logs')">
+          <button class="tool-btn" :title="t('sidebar.logs.title')" @click="emit('logs')">
             <el-icon><Clock /></el-icon>
-            操作日志
+            {{ t("sidebar.logs") }}
           </button>
-          <button class="tool-btn accent" title="局域网内互传文件" @click="emit('transfer')">
+          <button class="tool-btn accent" :title="t('sidebar.transfer.title')" @click="emit('transfer')">
             <el-icon><Share /></el-icon>
-            互传文件
+            {{ t("sidebar.transfer") }}
           </button>
         </div>
       </div>
@@ -176,9 +183,9 @@ onBeforeUnmount(() => document.removeEventListener("click", closeMenu))
     <div class="side-tree">
       <div v-if="filtered.length === 0" class="empty">
         <div class="empty-icon">&gt;_</div>
-        <p v-if="keyword">没有匹配的连接</p>
-        <p v-else>还没有连接配置</p>
-        <button v-if="!keyword" class="empty-btn" @click="emit('new')">创建第一个连接</button>
+        <p v-if="keyword">{{ t("sidebar.empty.search") }}</p>
+        <p v-else>{{ t("sidebar.empty.none") }}</p>
+        <button v-if="!keyword" class="empty-btn" @click="emit('new')">{{ t("sidebar.empty.create") }}</button>
       </div>
 
       <el-tree
@@ -214,22 +221,23 @@ onBeforeUnmount(() => document.removeEventListener("click", closeMenu))
     </div>
 
     <div class="side-foot" @click.stop>
-      <button class="avatar-btn" :title="user ? '账号菜单' : '访客菜单'" @click="toggleAcctMenu">
+      <button class="avatar-btn" :title="user ? t('sidebar.account.menu.title') : t('sidebar.guest.menu.title')" @click="toggleAcctMenu">
         <span class="avatar" :class="{ guest: !user }">{{ initials }}</span>
         <span class="who">
-          <span class="uname">{{ user ? user.username : "访客模式" }}</span>
+          <span class="uname">{{ user ? user.username : t("sidebar.guest.mode") }}</span>
           <span class="umeta">
-            <span v-if="user" class="unlimited">已登录 · 无限窗口</span>
-            <span v-else>并行窗口 {{ openedCount }} / 3</span>
+            <span v-if="user" class="unlimited">{{ t("sidebar.logged_in") }}</span>
+            <span v-else>{{ t("sidebar.guest.windows", { count: openedCount, limit: 3 }) }}</span>
           </span>
         </span>
       </button>
-      <button v-if="user" class="acct-btn" @click="emit('logout')">退出</button>
-      <button v-else class="acct-btn accent" @click="emit('loginRequest')">登录</button>
+      <button v-if="user" class="acct-btn" @click="emit('logout')">{{ t("sidebar.logout") }}</button>
+      <button v-else class="acct-btn accent" @click="emit('loginRequest')">{{ t("sidebar.login") }}</button>
 
       <div v-if="acctMenu.visible" class="acct-menu" @click.stop>
-        <button v-if="user" @click="pickAcct('password')">修改密码</button>
-        <button @click="pickAcct('logs')">操作日志</button>
+        <button v-if="user" @click="pickAcct('password')">{{ t("sidebar.menu.password") }}</button>
+        <button @click="pickAcct('logs')">{{ t("sidebar.menu.logs") }}</button>
+        <button @click="pickAcct('settings')">{{ t("sidebar.menu.settings") }}</button>
       </div>
     </div>
 
@@ -239,9 +247,9 @@ onBeforeUnmount(() => document.removeEventListener("click", closeMenu))
       :style="{ left: menu.x + 'px', top: menu.y + 'px' }"
       @click.stop
     >
-      <button @click="runMenu('open')">打开连接</button>
-      <button @click="runMenu('edit')">编辑配置</button>
-      <button class="danger" @click="runMenu('remove')">删除连接</button>
+      <button @click="runMenu('open')">{{ t("sidebar.ctx.open") }}</button>
+      <button @click="runMenu('edit')">{{ t("sidebar.ctx.edit") }}</button>
+      <button class="danger" @click="runMenu('remove')">{{ t("sidebar.ctx.remove") }}</button>
     </div>
   </aside>
 </template>
@@ -617,6 +625,24 @@ onBeforeUnmount(() => document.removeEventListener("click", closeMenu))
 .acct-menu button:hover {
   background: #17262f;
   color: #e6f4fb;
+}
+
+.acct-menu button.active {
+  background: rgba(45, 212, 191, 0.08);
+  color: var(--accent);
+}
+
+.acct-sep {
+  height: 1px;
+  margin: 4px 6px;
+  background: #1d2b34;
+}
+
+.acct-lang-label {
+  padding: 6px 10px 4px;
+  font-size: 10.5px;
+  letter-spacing: 0.4px;
+  color: var(--text-mute);
 }
 
 .acct-btn {

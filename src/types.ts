@@ -124,6 +124,18 @@ export interface LanStatus {
   port: number
   listening: boolean
   saveDir: string
+  /** 自定义目录不可用、已回退系统下载目录 */
+  saveDirFallback: boolean
+}
+
+export interface LanSettings {
+  saveDir: string
+  /** 是否设置过自定义目录 */
+  custom: boolean
+  /** 自定义目录不可用、已回退 */
+  fallback: boolean
+  /** 系统默认下载目录 */
+  defaultDir: string
 }
 
 export interface LanIncomingEvent {

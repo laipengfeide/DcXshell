@@ -2,6 +2,7 @@
 import { reactive, ref, watch } from "vue"
 import { ElMessage } from "element-plus"
 import * as api from "@/api"
+import { t, tErr } from "@/i18n"
 
 const props = defineProps<{ visible: boolean }>()
 const emit = defineEmits<{
@@ -29,25 +30,25 @@ function close() {
 
 async function submit() {
   if (!form.oldPassword) {
-    ElMessage.warning("请输入原密码")
+    ElMessage.warning(t("pwd.err.oldRequired"))
     return
   }
   if (form.newPassword.length < 6) {
-    ElMessage.warning("新密码至少需要 6 位")
+    ElMessage.warning(t("pwd.err.newTooShort"))
     return
   }
   if (form.newPassword !== form.confirm) {
-    ElMessage.warning("两次输入的新密码不一致")
+    ElMessage.warning(t("pwd.err.mismatch"))
     return
   }
   saving.value = true
   try {
     await api.changePassword(form.oldPassword, form.newPassword)
-    ElMessage.success("密码修改成功，下次登录请使用新密码")
+    ElMessage.success(t("pwd.ok"))
     emit("changed")
     close()
   } catch (err) {
-    ElMessage.error(String(err))
+    ElMessage.error(tErr(err))
   } finally {
     saving.value = false
   }
@@ -66,45 +67,45 @@ async function submit() {
   >
     <div class="pwd-card">
       <header class="pwd-head">
-        <h3>修改密码</h3>
-        <p>需要先校验原密码，修改后立即生效</p>
+        <h3>{{ t("pwd.title") }}</h3>
+        <p>{{ t("pwd.subtitle") }}</p>
       </header>
 
-      <label class="field-label">原密码</label>
+      <label class="field-label">{{ t("pwd.label.old") }}</label>
       <el-input
         v-model="form.oldPassword"
         size="large"
         type="password"
         show-password
-        placeholder="请输入当前密码"
+        :placeholder="t('pwd.ph.old')"
         autocomplete="off"
       />
 
-      <label class="field-label">新密码</label>
+      <label class="field-label">{{ t("pwd.label.new") }}</label>
       <el-input
         v-model="form.newPassword"
         size="large"
         type="password"
         show-password
-        placeholder="至少 6 位"
+        :placeholder="t('pwd.ph.new')"
         autocomplete="new-password"
       />
 
-      <label class="field-label">确认新密码</label>
+      <label class="field-label">{{ t("pwd.label.confirm") }}</label>
       <el-input
         v-model="form.confirm"
         size="large"
         type="password"
         show-password
-        placeholder="再次输入新密码"
+        :placeholder="t('pwd.ph.confirm')"
         autocomplete="new-password"
         @keyup.enter="submit"
       />
 
       <div class="pwd-actions">
-        <button class="ghost-btn" :disabled="saving" @click="close">取消</button>
+        <button class="ghost-btn" :disabled="saving" @click="close">{{ t("pwd.cancel") }}</button>
         <el-button type="primary" size="large" :loading="saving" class="ok-btn" @click="submit">
-          确认修改
+          {{ t("pwd.submit") }}
         </el-button>
       </div>
     </div>

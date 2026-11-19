@@ -37,8 +37,8 @@
       "icons/128x128@2x.png",
       "icons/icon.ico"
     ],
-    "shortDescription": "Dc Xshell SSH 终端",
-    "longDescription": "面向运维、测试与研发人员的轻量 SSH 终端客户端，支持局域网内登录用户之间的 10GB 以内流式文件互传。",
+    "shortDescription": "Dc Xshell — SSH terminal / SSH 终端",
+    "longDescription": "Lightweight SSH terminal for ops, testing and development, with streaming LAN file transfer up to 10GB. / 面向运维、测试与研发人员的轻量 SSH 终端，支持局域网内 10GB 以内流式文件互传。",
     "copyright": "Copyright © 2026 Dc Xshell"
   }
 }

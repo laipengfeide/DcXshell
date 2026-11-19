@@ -3,6 +3,7 @@ import { computed, onMounted, ref } from "vue"
 import { Refresh } from "@element-plus/icons-vue"
 import { ElMessage } from "element-plus"
 import * as api from "@/api"
+import { t, tErr } from "@/i18n"
 import { appState } from "@/store"
 import type { AuditLogItem } from "@/types"
 
@@ -15,19 +16,19 @@ const loading = ref(false)
 const filter = ref<Filter>("all")
 const ip = ref("")
 
-const filters: { key: Filter; label: string }[] = [
-  { key: "all", label: "全部" },
-  { key: "login", label: "登录" },
-  { key: "logout", label: "退出" },
-  { key: "connect", label: "连接" },
-  { key: "command", label: "命令" },
+const filters: { key: Filter; labelKey: string }[] = [
+  { key: "all", labelKey: "logs.filter.all" },
+  { key: "login", labelKey: "logs.filter.login" },
+  { key: "logout", labelKey: "logs.filter.logout" },
+  { key: "connect", labelKey: "logs.filter.connect" },
+  { key: "command", labelKey: "logs.filter.command" },
 ]
 
-const meta: Record<string, { label: string; cls: string }> = {
-  login: { label: "登录", cls: "login" },
-  logout: { label: "退出", cls: "logout" },
-  connect: { label: "连接", cls: "connect" },
-  command: { label: "命令", cls: "command" },
+const meta: Record<string, { cls: string }> = {
+  login: { cls: "login" },
+  logout: { cls: "logout" },
+  connect: { cls: "connect" },
+  command: { cls: "command" },
 }
 
 const filtered = computed(() =>
@@ -35,7 +36,7 @@ const filtered = computed(() =>
 )
 
 const identity = computed(() =>
-  appState.user ? appState.user.username : "访客（本机访客记录）"
+  appState.user ? appState.user.username : t("logs.guest")
 )
 
 function countOf(key: Filter) {
@@ -48,7 +49,7 @@ async function refresh() {
   try {
     logs.value = await api.listAuditLogs(500)
   } catch (err) {
-    ElMessage.error(`读取操作日志失败：${err}`)
+    ElMessage.error(t("logs.loadFailed", { error: tErr(err) }))
   } finally {
     loading.value = false
   }
@@ -67,7 +68,7 @@ onMounted(async () => {
 <template>
   <section class="audit-page">
     <header class="audit-head">
-      <button class="back-btn" title="返回工作台" @click="emit('close')">
+      <button class="back-btn" :title="t('logs.backTitle')" @click="emit('close')">
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none">
           <path
             d="M15 5l-7 7 7 7"
@@ -77,18 +78,18 @@ onMounted(async () => {
             stroke-linejoin="round"
           />
         </svg>
-        返回
+        {{ t("logs.back") }}
       </button>
       <div class="head-text">
-        <h2>操作日志</h2>
+        <h2>{{ t("logs.title") }}</h2>
         <p>
-          当前身份：{{ identity }}
-          <template v-if="ip"> · 本机 IP {{ ip }}</template>
+          {{ t("logs.identity", { name: identity }) }}
+          <template v-if="ip"> · {{ t("logs.localIp", { ip }) }}</template>
         </p>
       </div>
       <button class="refresh-btn" :disabled="loading" @click="refresh">
         <el-icon><Refresh /></el-icon>
-        {{ loading ? "加载中" : "刷新" }}
+        {{ loading ? t("logs.loading") : t("logs.refresh") }}
       </button>
     </header>
 
@@ -100,34 +101,34 @@ onMounted(async () => {
         :class="{ active: filter === item.key }"
         @click="filter = item.key"
       >
-        {{ item.label }}
+        {{ t(item.labelKey) }}
         <span class="chip-count">{{ countOf(item.key) }}</span>
       </button>
-      <span class="filters-hint">仅显示当前身份最近的 500 条记录</span>
+      <span class="filters-hint">{{ t("logs.hint") }}</span>
     </div>
 
     <div class="audit-table">
       <div class="thead">
-        <span class="col-time">时间</span>
-        <span class="col-type">类型</span>
-        <span class="col-target">目标 / 内容</span>
-        <span class="col-ip">IP</span>
+        <span class="col-time">{{ t("logs.col.time") }}</span>
+        <span class="col-type">{{ t("logs.col.type") }}</span>
+        <span class="col-target">{{ t("logs.col.target") }}</span>
+        <span class="col-ip">{{ t("logs.col.ip") }}</span>
       </div>
 
       <div class="tbody">
         <div v-if="!loading && filtered.length === 0" class="empty">
           <span class="empty-mark">&gt;_</span>
-          <p>暂无操作记录</p>
+          <p>{{ t("logs.empty") }}</p>
         </div>
 
         <div v-for="item in filtered" :key="item.id" class="trow">
           <span class="col-time mono">{{ item.createdAt }}</span>
           <span class="col-type">
             <span class="tag" :class="meta[item.action]?.cls || 'command'">
-              {{ meta[item.action]?.label || item.action }}
+              {{ t("logs.action." + item.action) }}
             </span>
           </span>
-          <span class="col-target" :title="item.target">{{ item.target || "—" }}</span>
+          <span class="col-target" :title="tErr(item.target)">{{ tErr(item.target) || "—" }}</span>
           <span class="col-ip mono">{{ item.ip || "—" }}</span>
         </div>
       </div>

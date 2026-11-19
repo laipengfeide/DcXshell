@@ -5,6 +5,7 @@ import { open } from "@tauri-apps/plugin-dialog"
 import { ElMessage } from "element-plus"
 import { Download, Refresh, Upload } from "@element-plus/icons-vue"
 import * as api from "@/api"
+import { t, tErr } from "@/i18n"
 import type { LanIncomingEvent, LanPeer, LanStatus, LanTransferEvent } from "@/types"
 
 const props = defineProps<{ visible: boolean }>()
@@ -15,6 +16,8 @@ const peers = ref<LanPeer[]>([])
 const transfers = ref<LanTransferEvent[]>([])
 const incoming = ref<LanIncomingEvent | null>(null)
 const saveDir = ref("")
+/** 本次会话是否手动改过接收目录；未改过时跟随设置里的默认目录 */
+const customDir = ref(false)
 const refreshing = ref(false)
 const sendingTo = ref("")
 
@@ -27,9 +30,9 @@ const listening = computed(() => status.value?.listening ?? false)
 async function loadStatus() {
   try {
     status.value = await api.lanStatus()
-    if (!saveDir.value) saveDir.value = status.value.saveDir
+    if (!customDir.value) saveDir.value = status.value.saveDir
   } catch (err) {
-    ElMessage.error(`读取互传状态失败：${err}`)
+    ElMessage.error(t("transfer.statusLoadFailed", { error: tErr(err) }))
   }
 }
 
@@ -56,18 +59,24 @@ function upsert(event: LanTransferEvent) {
   }
 }
 
+/** 访客身份在后端以 "guest" 标识，界面上按当前语言显示 */
+function peerLabel(name: string) {
+  const value = (name || "").trim()
+  return value === "guest" || value === "访客" ? t("guest") : value
+}
+
 async function sendFile(peer: LanPeer) {
   try {
     const picked = await open({
       multiple: false,
       directory: false,
-      title: `选择要发送给 ${peer.name} 的文件`,
+      title: t("transfer.sendPickTitle", { name: peerLabel(peer.name) }),
     })
     if (!picked || Array.isArray(picked)) return
     sendingTo.value = peer.id
     await api.lanSendFile(picked, peer.id)
   } catch (err) {
-    ElMessage.error(`发送失败：${err}`)
+    ElMessage.error(t("transfer.sendFailed", { error: tErr(err) }))
   } finally {
     sendingTo.value = ""
   }
@@ -75,8 +84,11 @@ async function sendFile(peer: LanPeer) {
 
 async function pickDir() {
   try {
-    const dir = await open({ directory: true, title: "选择接收文件的保存目录" })
-    if (typeof dir === "string") saveDir.value = dir
+    const dir = await open({ directory: true, title: t("transfer.savePickTitle") })
+    if (typeof dir === "string") {
+      saveDir.value = dir
+      customDir.value = true
+    }
   } catch {
     /* 用户取消选择 */
   }
@@ -96,10 +108,10 @@ async function acceptIncoming() {
       total: item.size,
       transferred: 0,
       status: "waiting",
-      message: "准备接收",
+      message: "transfer.preparing",
     })
   } catch (err) {
-    ElMessage.error(`接收失败：${err}`)
+    ElMessage.error(t("transfer.receiveFailed", { error: tErr(err) }))
   }
 }
 
@@ -110,7 +122,7 @@ async function declineIncoming() {
   try {
     await api.lanRespond(item.id, false, null)
   } catch (err) {
-    ElMessage.error(String(err))
+    ElMessage.error(tErr(err))
   }
 }
 
@@ -136,22 +148,26 @@ async function openSaved(item: LanTransferEvent) {
   try {
     await api.openPath(item.path)
   } catch (err) {
-    ElMessage.error(`打开目录失败：${err}`)
+    ElMessage.error(t("transfer.openDirFailed", { error: tErr(err) }))
   }
 }
 
 function statusText(item: LanTransferEvent) {
   switch (item.status) {
     case "waiting":
-      return item.direction === "send" ? "等待对方确认" : "等待开始"
+      return item.direction === "send"
+        ? t("transfer.status.waitConfirm")
+        : t("transfer.status.waitStart")
     case "active":
-      return item.direction === "send" ? "发送中" : "接收中"
+      return item.direction === "send"
+        ? t("transfer.status.sending")
+        : t("transfer.status.receiving")
     case "done":
-      return "已完成"
+      return t("transfer.status.done")
     case "declined":
-      return "已拒绝"
+      return t("transfer.status.declined")
     default:
-      return "失败"
+      return t("transfer.status.failed")
   }
 }
 
@@ -185,7 +201,7 @@ defineExpose({ refresh })
 <template>
   <section v-if="props.visible" class="transfer-page">
     <header class="tr-head">
-      <button class="back-btn" title="返回工作台" @click="emit('update:visible', false)">
+      <button class="back-btn" :title="t('transfer.backTitle')" @click="emit('update:visible', false)">
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none">
           <path
             d="M15 5l-7 7 7 7"
@@ -195,58 +211,63 @@ defineExpose({ refresh })
             stroke-linejoin="round"
           />
         </svg>
-        返回
+        {{ t("transfer.back") }}
       </button>
       <div class="head-text">
-        <h2>局域网互传</h2>
+        <h2>{{ t("transfer.title") }}</h2>
         <p v-if="status">
-          本机 {{ status.name || "未激活" }} · {{ status.ip || "未探测到 IP" }} · 传输端口
-          {{ status.port }}
+          {{ t("transfer.localName", { name: peerLabel(status.name) || t("transfer.inactive") }) }} ·
+          {{ status.ip || t("transfer.noIp") }} ·
+          {{ t("transfer.port", { port: status.port }) }}
         </p>
       </div>
       <button class="refresh-btn" :disabled="refreshing" @click="refresh">
         <el-icon><Refresh /></el-icon>
-        {{ refreshing ? "刷新中" : "刷新" }}
+        {{ refreshing ? t("transfer.refreshing") : t("transfer.refresh") }}
       </button>
     </header>
 
     <div v-if="status && !listening" class="warn">
-      传输端口未监听成功，可能被其他程序占用；若首次运行请允许 Windows 防火墙访问并选择「专用网络」。
+      {{ t("transfer.warn") }}
+    </div>
+
+    <div v-if="status?.saveDirFallback" class="warn">
+      {{ t("settings.transfer.fallback") }}
     </div>
 
     <div class="save-line">
-      <span class="save-label">接收文件保存到</span>
-      <span class="save-path mono" :title="saveDir">{{ saveDir || "未设置" }}</span>
-      <button class="link-btn" @click="pickDir">更改目录</button>
+      <span class="save-label">{{ t("transfer.saveTo") }}</span>
+      <span class="save-path mono" :title="saveDir">{{ saveDir || t("transfer.unset") }}</span>
+      <button class="link-btn" @click="pickDir">{{ t("transfer.changeDir") }}</button>
     </div>
 
     <div class="tr-body">
       <aside class="peer-pane">
         <div class="pane-title">
-          在线用户 <span class="count">{{ peers.length }}</span>
+          {{ t("transfer.peers") }} <span class="count">{{ peers.length }}</span>
         </div>
         <div v-if="peers.length === 0" class="peer-empty">
-          暂未发现同局域网的其他用户，<br />确认对方也已打开 Dc Xshell 并登录。
+          {{ t("transfer.peersEmpty") }}<br />{{ t("transfer.peersEmpty2") }}
         </div>
         <div v-for="peer in peers" :key="peer.id" class="peer-item">
-          <span class="p-avatar">{{ peer.name.slice(0, 1).toUpperCase() }}</span>
+          <span class="p-avatar">{{ peerLabel(peer.name).slice(0, 1).toUpperCase() }}</span>
           <div class="peer-text">
-            <span class="p-name" :title="peer.name">{{ peer.name }}</span>
+            <span class="p-name" :title="peerLabel(peer.name)">{{ peerLabel(peer.name) }}</span>
             <span class="p-ip mono">{{ peer.ip }}</span>
           </div>
           <button class="send-btn" :disabled="sendingTo === peer.id" @click="sendFile(peer)">
             <el-icon><Upload /></el-icon>
-            发送
+            {{ t("transfer.send") }}
           </button>
         </div>
       </aside>
 
       <div class="record-pane">
         <div class="pane-title">
-          传输记录 <span class="count">{{ transfers.length }}</span>
-          <span class="pane-hint">单文件最大 10GB，接收方确认后开始</span>
+          {{ t("transfer.records") }} <span class="count">{{ transfers.length }}</span>
+          <span class="pane-hint">{{ t("transfer.limitHint") }}</span>
         </div>
-        <div v-if="transfers.length === 0" class="record-empty">&gt;_ 还没有传输记录</div>
+        <div v-if="transfers.length === 0" class="record-empty">&gt;_ {{ t("transfer.noRecords") }}</div>
         <div v-for="item in transfers" :key="item.id" class="record" :class="item.status">
           <div class="r-top">
             <span class="r-dir" :class="item.direction">
@@ -266,14 +287,14 @@ defineExpose({ refresh })
             <span class="mono">
               {{ fmtSize(item.transferred) }} / {{ fmtSize(item.total) }} · {{ percent(item) }}%
             </span>
-            <span class="r-msg" :title="item.message">{{ item.message }}</span>
+            <span class="r-msg" :title="tErr(item.message)">{{ tErr(item.message) }}</span>
             <button
               v-if="item.status === 'done' && item.path"
               class="open-dir-btn"
-              title="打开文件所在目录"
+              :title="t('transfer.openDirTitle')"
               @click="openSaved(item)"
             >
-              打开目录
+              {{ t("transfer.openDir") }}
             </button>
           </div>
         </div>
@@ -284,21 +305,21 @@ defineExpose({ refresh })
   <div v-if="incoming" class="incoming-mask">
     <div class="incoming-card">
       <div class="ic-head">
-        <span class="ic-badge">接收文件</span>
-        <span class="ic-from">{{ incoming.from }}（{{ incoming.ip }}）</span>
+        <span class="ic-badge">{{ t("transfer.incoming") }}</span>
+        <span class="ic-from">{{ t("transfer.from", { name: incoming.from, ip: incoming.ip }) }}</span>
       </div>
       <div class="ic-file">
         <span class="ic-name" :title="incoming.fileName">{{ incoming.fileName }}</span>
         <span class="ic-size mono">{{ fmtSize(incoming.size) }}</span>
       </div>
       <div class="ic-dir">
-        <span class="ic-label">保存到</span>
-        <span class="ic-path mono" :title="saveDir">{{ saveDir || "未设置" }}</span>
-        <button class="link-btn" @click="pickDir">更改</button>
+        <span class="ic-label">{{ t("transfer.saveToShort") }}</span>
+        <span class="ic-path mono" :title="saveDir">{{ saveDir || t("transfer.unset") }}</span>
+        <button class="link-btn" @click="pickDir">{{ t("transfer.change") }}</button>
       </div>
       <div class="ic-foot">
-        <button class="ic-btn ghost" @click="declineIncoming">拒绝</button>
-        <button class="ic-btn primary" @click="acceptIncoming">接收</button>
+        <button class="ic-btn ghost" @click="declineIncoming">{{ t("transfer.decline") }}</button>
+        <button class="ic-btn primary" @click="acceptIncoming">{{ t("transfer.accept") }}</button>
       </div>
     </div>
   </div>

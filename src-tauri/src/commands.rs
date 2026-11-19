@@ -9,7 +9,7 @@ use std::{
 };
 
 use rusqlite::{params, Connection, OptionalExtension};
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::{
     audit, auth, crypto::SecretBox, db, lan, models::*, ssh_client,
@@ -51,7 +51,7 @@ impl AppState {
                 &device_id,
                 &u.username,
                 "login",
-                "自动恢复登录",
+                "audit.auto_login",
                 &ip,
             );
             lan.set_identity(&u.username, &ip);
@@ -108,7 +108,7 @@ impl AppState {
             let guard = self.current_user.lock().unwrap_or_else(|e| e.into_inner());
             match guard.as_ref() {
                 Some(u) => (Some(u.id), u.username.clone()),
-                None => (None, "访客".to_string()),
+                None => (None, "guest".to_string()),
             }
         };
         let ip = self.ip();
@@ -130,6 +130,43 @@ impl AppState {
             .unwrap_or_else(|e| e.into_inner())
             .get(client_key)
             .cloned()
+    }
+
+    /// 读取一个设置项。
+    pub fn setting(&self, key: &str) -> Option<String> {
+        let conn = self.conn();
+        db::get_setting(&conn, key)
+    }
+
+    /// 系统默认的接收目录（下载目录，取不到则退回用户主目录）。
+    pub fn system_save_dir(&self) -> std::path::PathBuf {
+        self.app
+            .path()
+            .download_dir()
+            .or_else(|_| self.app.path().home_dir())
+            .unwrap_or_else(|_| std::path::PathBuf::from("."))
+    }
+
+    /// 局域网互传实际使用的保存目录，以及是否因自定义目录失效而回退。
+    pub fn lan_save_dir(&self) -> (std::path::PathBuf, bool) {
+        let custom = self
+            .setting("lan_save_dir")
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
+        if let Some(dir) = custom.as_ref() {
+            let path = std::path::PathBuf::from(dir);
+            if lan::check_save_dir(&path).is_ok() {
+                return (path, false);
+            }
+        }
+        (self.system_save_dir(), custom.is_some())
+    }
+
+    /// 自定义保存目录设置（空表示未设置自定义目录）。
+    pub fn custom_save_dir(&self) -> Option<String> {
+        self.setting("lan_save_dir")
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
     }
 }
 
@@ -165,8 +202,8 @@ fn fetch_item(conn: &Connection, id: i64) -> Result<ConnectionItem, String> {
         },
     )
     .optional()
-    .map_err(|e| e.to_string())?
-    .ok_or_else(|| "连接不存在".to_string())
+    .map_err(|e| format!("err.db|{e}"))?
+    .ok_or_else(|| "err.connection_not_found".to_string())
 }
 
 fn load_stored_secrets(
@@ -212,11 +249,11 @@ fn params_from_input(
 ) -> Result<ssh_client::ConnectParams, String> {
     let host = input.host.trim().to_string();
     if host.is_empty() {
-        return Err("服务器地址不能为空".into());
+        return Err("err.host_required".into());
     }
     let username = input.username.trim().to_string();
     if username.is_empty() {
-        return Err("用户名不能为空".into());
+        return Err("err.username_required".into());
     }
     let auth_type = if input.auth_type == "key" {
         "key".to_string()
@@ -250,7 +287,7 @@ fn params_from_input(
     }
 
     if auth_type == "key" && key_path.is_none() {
-        return Err("私钥登录需要选择私钥文件".into());
+        return Err("err.key_required".into());
     }
 
     Ok(ssh_client::ConnectParams {
@@ -286,8 +323,8 @@ fn params_from_db(state: &AppState, id: i64) -> Result<(ssh_client::ConnectParam
             },
         )
         .optional()
-        .map_err(|e| e.to_string())?
-        .ok_or_else(|| "连接配置不存在".to_string())?
+        .map_err(|e| format!("err.db|{e}"))?
+        .ok_or_else(|| "err.connection_not_found".to_string())?
     };
 
     let (name, host, port, username, auth_type, pwd_enc, key_path, pass_enc) = row;
@@ -345,7 +382,7 @@ pub fn register(
         .lock()
         .unwrap_or_else(|e| e.into_inner()) = Some(user.clone());
     state.lan.set_identity(&user.username, &ip);
-    state.audit("login", "注册并自动登录");
+    state.audit("login", "audit.register_login");
     Ok(user)
 }
 
@@ -367,14 +404,14 @@ pub fn login(
         .lock()
         .unwrap_or_else(|e| e.into_inner()) = Some(user.clone());
     state.lan.set_identity(&user.username, &ip);
-    state.audit("login", "账号登录");
+    state.audit("login", "audit.login");
     Ok(user)
 }
 
 #[tauri::command]
 pub fn logout(state: State<'_, AppState>) -> Result<(), String> {
     if state.current_owner().is_some() {
-        state.audit("logout", "主动退出");
+        state.audit("logout", "audit.logout");
     }
     {
         let conn = state.conn();
@@ -398,8 +435,8 @@ pub fn guest_enter(state: State<'_, AppState>) -> Result<String, String> {
         .guest_session
         .lock()
         .unwrap_or_else(|e| e.into_inner()) = Some(state.device_id.clone());
-    state.lan.set_identity("访客", &ip);
-    state.audit("login", "访客进入");
+    state.lan.set_identity("guest", &ip);
+    state.audit("login", "audit.guest_enter");
     Ok(ip)
 }
 
@@ -412,7 +449,7 @@ pub fn guest_leave(state: State<'_, AppState>) -> Result<(), String> {
         .unwrap_or_else(|e| e.into_inner())
         .take();
     if active.is_some() {
-        state.audit("logout", "访客离开");
+        state.audit("logout", "audit.guest_leave");
         let ip = state.ip();
         state.lan.set_identity("", &ip);
     }
@@ -434,7 +471,7 @@ pub fn change_password(
 ) -> Result<(), String> {
     let user_id = state
         .current_owner()
-        .ok_or_else(|| "访客模式不支持修改密码".to_string())?;
+        .ok_or_else(|| "err.guest_password_change".to_string())?;
     let conn = state.conn();
     auth::change_password(&conn, user_id, &old_password, &new_password)
 }
@@ -455,7 +492,7 @@ pub fn list_audit_logs(
         "SELECT id, action, target, ip, username, created_at FROM audit_logs
          WHERE user_id IS NULL AND session_id = ?1 ORDER BY id DESC LIMIT ?2"
     };
-    let mut stmt = conn.prepare(sql).map_err(|e| e.to_string())?;
+    let mut stmt = conn.prepare(sql).map_err(|e| format!("err.db|{e}"))?;
     // 登录用户按 user_id 过滤；访客记录写入时以设备标识作为会话标识，这里按同一标识过滤
     let key = match owner {
         Some(id) => rusqlite::types::Value::Integer(id),
@@ -472,8 +509,8 @@ pub fn list_audit_logs(
                 created_at: row.get(5)?,
             })
         })
-        .map_err(|e| e.to_string())?;
-    rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())
+        .map_err(|e| format!("err.db|{e}"))?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(|e| format!("err.db|{e}"))
 }
 
 /// 记录一条终端命令（前端在用户回车后调用），密码形态先脱敏。
@@ -484,8 +521,10 @@ pub fn log_command(state: State<'_, AppState>, client_key: String, command: Stri
         return;
     }
     let target = match state.session(&client_key) {
-        Some(session) => format!("{}（{}）: {}", session.name, session.host, sanitized),
-        None => format!("未知会话: {sanitized}"),
+        Some(session) => {
+            format!("audit.command|{}@{}|{}", session.name, session.host, sanitized)
+        }
+        None => format!("audit.command_unknown|{sanitized}"),
     };
     state.audit("command", &target);
 }
@@ -504,7 +543,7 @@ pub fn list_connections(state: State<'_, AppState>) -> Result<Vec<ConnectionItem
                     password_enc, passphrase_enc, created_at, updated_at
              FROM connections WHERE owner_id IS ?1 ORDER BY group_name, name, id",
         )
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| format!("err.db|{e}"))?;
     let rows = stmt
         .query_map(params![owner], |row| {
             let password_enc: Option<String> = row.get(8)?;
@@ -530,8 +569,8 @@ pub fn list_connections(state: State<'_, AppState>) -> Result<Vec<ConnectionItem
                 updated_at: row.get(11)?,
             })
         })
-        .map_err(|e| e.to_string())?;
-    rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())
+        .map_err(|e| format!("err.db|{e}"))?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(|e| format!("err.db|{e}"))
 }
 
 #[tauri::command]
@@ -542,15 +581,15 @@ pub fn save_connection(
     let owner = state.current_owner();
     let name = input.name.trim().to_string();
     if name.is_empty() {
-        return Err("连接名称不能为空".into());
+        return Err("err.connection_name_required".into());
     }
     let host = input.host.trim().to_string();
     if host.is_empty() {
-        return Err("服务器地址不能为空".into());
+        return Err("err.host_required".into());
     }
     let username = input.username.trim().to_string();
     if username.is_empty() {
-        return Err("用户名不能为空".into());
+        return Err("err.username_required".into());
     }
     let auth_type = if input.auth_type == "key" {
         "key".to_string()
@@ -560,7 +599,7 @@ pub fn save_connection(
     let key_path = if auth_type == "key" {
         let path = input.key_path.clone().unwrap_or_default().trim().to_string();
         if path.is_empty() {
-            return Err("私钥登录需要选择私钥文件".into());
+            return Err("err.key_required".into());
         }
         Some(path)
     } else {
@@ -571,7 +610,7 @@ pub fn save_connection(
         .clone()
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| "默认分组".to_string());
+        .unwrap_or_else(|| "Default group".to_string());
 
     let password_enc = input
         .password
@@ -603,8 +642,8 @@ pub fn save_connection(
                     },
                 )
                 .optional()
-                .map_err(|e| e.to_string())?
-                .ok_or_else(|| "连接不存在".to_string())?;
+                .map_err(|e| format!("err.db|{e}"))?
+                .ok_or_else(|| "err.connection_not_found".to_string())?;
 
             let final_password = if auth_type == "key" {
                 None
@@ -634,7 +673,7 @@ pub fn save_connection(
                     owner
                 ],
             )
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| format!("err.db|{e}"))?;
             id
         }
         None => {
@@ -657,7 +696,7 @@ pub fn save_connection(
                     now
                 ],
             )
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| format!("err.db|{e}"))?;
             conn.last_insert_rowid()
         }
     };
@@ -674,7 +713,7 @@ pub async fn delete_connection(state: State<'_, AppState>, id: i64) -> Result<()
             "DELETE FROM connections WHERE id = ?1 AND owner_id IS ?2",
             params![id, owner],
         )
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| format!("err.db|{e}"))?;
     }
     let targets: Vec<Arc<ssh_client::SshSession>> = state
         .sessions
@@ -722,7 +761,7 @@ pub async fn open_session(
         let mut sessions = state.sessions.lock().unwrap_or_else(|e| e.into_inner());
         sessions.retain(|_, s| s.alive.load(Ordering::SeqCst));
         if is_guest && !sessions.contains_key(&client_key) && sessions.len() >= 3 {
-            return Err("访客模式最多同时打开 3 个并行窗口，登录后可无限打开。".into());
+            return Err("err.guest_window_limit".into());
         }
         if let Some(old) = sessions.remove(&client_key) {
             crate::sftp::clear_sftp(&state, &client_key);
@@ -738,7 +777,7 @@ pub async fn open_session(
         ssh_client::establish(&params, cols, rows),
     )
     .await
-    .map_err(|_| "连接超时：20 秒内未能建立 SSH 会话".to_string())??;
+    .map_err(|_| "err.session_timeout|20".to_string())??;
 
     let session_id = uuid::Uuid::new_v4().to_string();
     let session = Arc::new(ssh_client::SshSession {
@@ -763,7 +802,7 @@ pub async fn open_session(
 
     ssh_client::spawn_reader(state.app.clone(), session, established.read);
 
-    state.audit("connect", &format!("{name}（{host}:{port}）"));
+    state.audit("connect", &format!("audit.connect|{name}|{host}:{port}"));
 
     Ok(SessionInfo {
         client_key,
@@ -784,9 +823,9 @@ pub async fn write_session(
 ) -> Result<(), String> {
     let session = state
         .session(&client_key)
-        .ok_or_else(|| "会话不存在或已关闭".to_string())?;
+        .ok_or_else(|| "err.session_not_found".to_string())?;
     if !session.alive.load(Ordering::SeqCst) {
-        return Err("连接已断开".into());
+        return Err("err.connection_closed".into());
     }
     if data.is_empty() {
         return Ok(());
@@ -796,7 +835,7 @@ pub async fn write_session(
         Ok(()) => Ok(()),
         Err(e) => {
             session.alive.store(false, Ordering::SeqCst);
-            Err(format!("发送失败：{e}"))
+            Err(format!("err.send_failed|{e}"))
         }
     }
 }
@@ -840,7 +879,7 @@ pub async fn ping_session(
         return Ok(PingResult {
             alive: false,
             latency_ms: 0,
-            message: Some("会话不存在".into()),
+            message: Some("err.session_not_found".into()),
         });
     };
     let (alive, latency_ms) = session.ping().await;
@@ -850,7 +889,7 @@ pub async fn ping_session(
         message: if alive {
             None
         } else {
-            Some("心跳超时，连接可能已断开".into())
+            Some("err.heartbeat_timeout".into())
         },
     })
 }
@@ -875,10 +914,73 @@ pub fn notify_ready(state: State<'_, AppState>) {
 // 局域网互传
 // ---------------------------------------------------------------------------
 
-/// 本机互传状态：显示名、IP、端口、监听是否正常、默认保存目录。
+/// 本机互传状态：显示名、IP、端口、监听是否正常、实际保存目录。
 #[tauri::command]
 pub fn lan_status(state: State<'_, AppState>) -> lan::LanStatus {
-    state.lan.status()
+    let (dir, fallback) = state.lan_save_dir();
+    state.lan.status(dir, fallback)
+}
+
+/// 设置页读取的互传配置。
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LanSettings {
+    /// 实际生效的目录（自定义目录不可用时是回退后的系统下载目录）
+    pub save_dir: String,
+    /// 用户是否设置过自定义目录
+    pub custom: bool,
+    /// 自定义目录存在但不可用，已回退
+    pub fallback: bool,
+    /// 系统默认下载目录
+    pub default_dir: String,
+}
+
+fn build_settings(state: &AppState) -> LanSettings {
+    let custom = state.custom_save_dir();
+    let (dir, fallback) = state.lan_save_dir();
+    LanSettings {
+        save_dir: dir.to_string_lossy().to_string(),
+        custom: custom.is_some(),
+        fallback,
+        default_dir: state.system_save_dir().to_string_lossy().to_string(),
+    }
+}
+
+#[tauri::command]
+pub fn lan_settings(state: State<'_, AppState>) -> LanSettings {
+    build_settings(&state)
+}
+
+/// 校验目录是否可作为接收目录（存在、是目录、可写）。
+#[tauri::command]
+pub fn lan_check_dir(dir: String) -> Result<(), String> {
+    lan::check_save_dir(std::path::Path::new(dir.trim()))
+}
+
+/// 设置互传默认保存目录；目录不可用时报错，不会写入设置。
+#[tauri::command]
+pub fn lan_set_save_dir(state: State<'_, AppState>, dir: String) -> Result<LanSettings, String> {
+    let trimmed = dir.trim();
+    if trimmed.is_empty() {
+        return Err("err.dir_empty".into());
+    }
+    lan::check_save_dir(std::path::Path::new(trimmed))?;
+    {
+        let conn = state.conn();
+        db::set_setting(&conn, "lan_save_dir", trimmed)
+            .map_err(|e| format!("err.save_setting|{e}"))?;
+    }
+    Ok(build_settings(&state))
+}
+
+/// 清除自定义保存目录，恢复系统下载目录。
+#[tauri::command]
+pub fn lan_reset_save_dir(state: State<'_, AppState>) -> Result<LanSettings, String> {
+    {
+        let conn = state.conn();
+        db::del_setting(&conn, "lan_save_dir").map_err(|e| format!("err.save_setting|{e}"))?;
+    }
+    Ok(build_settings(&state))
 }
 
 /// 当前在线、可互传的用户。
@@ -918,7 +1020,7 @@ pub fn lan_respond(
 pub fn open_path(path: String) -> Result<(), String> {
     let p = PathBuf::from(&path);
     if !p.exists() {
-        return Err(format!("路径不存在：{path}"));
+        return Err(format!("err.path_not_found|{path}"));
     }
     #[cfg(windows)]
     {
@@ -927,7 +1029,7 @@ pub fn open_path(path: String) -> Result<(), String> {
         std::process::Command::new("explorer")
             .arg(&arg)
             .spawn()
-            .map_err(|e| format!("无法打开文件管理器：{e}"))?;
+            .map_err(|e| format!("err.open_explorer_failed|{e}"))?;
         return Ok(());
     }
     #[cfg(target_os = "macos")]
@@ -935,14 +1037,14 @@ pub fn open_path(path: String) -> Result<(), String> {
         std::process::Command::new("open")
             .arg(&path)
             .spawn()
-            .map_err(|e| format!("open 失败：{e}"))?;
+            .map_err(|e| format!("err.open_path_failed|{e}"))?;
     }
     #[cfg(all(unix, not(target_os = "macos")))]
     {
         std::process::Command::new("xdg-open")
             .arg(&path)
             .spawn()
-            .map_err(|e| format!("xdg-open 失败：{e}"))?;
+            .map_err(|e| format!("err.open_path_failed|{e}"))?;
     }
     Ok(())
 }

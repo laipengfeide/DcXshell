@@ -1,5 +1,8 @@
 <script setup lang="ts">
-import { onMounted, ref } from "vue"
+import { computed, onMounted, ref } from "vue"
+import zhCn from "element-plus/es/locale/lang/zh-cn"
+import en from "element-plus/es/locale/lang/en"
+import { i18n, t } from "./i18n"
 import AppTitleBar from "./components/AppTitleBar.vue"
 import LoginView from "./views/LoginView.vue"
 import WorkspaceView from "./views/WorkspaceView.vue"
@@ -9,6 +12,7 @@ import type { UserInfo } from "./types"
 
 const stage = ref<"boot" | "login" | "workspace">("boot")
 const canBack = ref(false)
+const epLocale = computed(() => (i18n.locale === "zh" ? zhCn : en))
 
 onMounted(async () => {
   try {
@@ -58,23 +62,25 @@ function onLogout() {
 </script>
 
 <template>
-  <div class="app-shell">
-    <AppTitleBar />
-    <div class="app-body">
-      <div v-if="stage === 'boot'" class="boot-screen">
-        <span class="boot-mark">&gt;_</span>
-        <span class="boot-text">Dc Xshell 正在启动…</span>
+  <el-config-provider :locale="epLocale">
+    <div class="app-shell">
+      <AppTitleBar />
+      <div class="app-body">
+        <div v-if="stage === 'boot'" class="boot-screen">
+          <span class="boot-mark">&gt;_</span>
+          <span class="boot-text">{{ t("app.booting") }}</span>
+        </div>
+        <LoginView
+          v-else-if="stage === 'login'"
+          :can-back="canBack"
+          @success="onLoginSuccess"
+          @guest="enterGuest"
+          @back="stage = 'workspace'"
+        />
+        <WorkspaceView v-else @login-request="requestLogin" @logout="onLogout" />
       </div>
-      <LoginView
-        v-else-if="stage === 'login'"
-        :can-back="canBack"
-        @success="onLoginSuccess"
-        @guest="enterGuest"
-        @back="stage = 'workspace'"
-      />
-      <WorkspaceView v-else @login-request="requestLogin" @logout="onLogout" />
     </div>
-  </div>
+  </el-config-provider>
 </template>
 
 <style scoped>

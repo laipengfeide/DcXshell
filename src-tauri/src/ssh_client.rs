@@ -109,18 +109,18 @@ fn friendly_error(err: &russh::Error) -> String {
     let text = err.to_string();
     let lower = text.to_lowercase();
     if lower.contains("refused") {
-        return "连接被拒绝：目标端口未开放或 SSH 服务未运行".into();
+        return "err.conn_refused".into();
     }
     if lower.contains("timed out") || lower.contains("timeout") {
-        return "连接超时：请检查网络与防火墙".into();
+        return "err.conn_timeout".into();
     }
     if lower.contains("dns") || lower.contains("name or service not known") {
-        return "域名解析失败：请检查服务器地址".into();
+        return "err.dns_failed".into();
     }
     if lower.contains("reset") {
-        return "连接被重置：服务器主动断开了连接".into();
+        return "err.conn_reset".into();
     }
-    format!("SSH 连接失败：{text}")
+    format!("err.ssh_connect|{text}")
 }
 
 pub async fn establish(params: &ConnectParams, cols: u32, rows: u32) -> Result<Established, String> {
@@ -141,18 +141,18 @@ pub async fn establish(params: &ConnectParams, cols: u32, rows: u32) -> Result<E
         ),
     )
     .await
-    .map_err(|_| "连接超时：15 秒内未能完成 SSH 握手".to_string())?
+    .map_err(|_| "err.handshake_timeout|15".to_string())?
     .map_err(|e| friendly_error(&e))?;
 
     let auth = match params.auth_type.as_str() {
         "key" => {
             let path = params.key_path.as_deref().unwrap_or_default();
             if path.is_empty() {
-                return Err("请先选择私钥文件".into());
+                return Err("err.key_required".into());
             }
             let passphrase = params.passphrase.as_deref().filter(|s| !s.is_empty());
             let key = load_secret_key(path, passphrase)
-                .map_err(|e| format!("读取私钥失败：{e}"))?;
+                .map_err(|e| format!("err.read_key|{e}"))?;
             let hash_alg = handle
                 .best_supported_rsa_hash()
                 .await
@@ -176,13 +176,13 @@ pub async fn establish(params: &ConnectParams, cols: u32, rows: u32) -> Result<E
     };
 
     if !auth.success() {
-        return Err("认证失败：请检查用户名、密码或私钥配置".into());
+        return Err("err.auth_failed".into());
     }
 
     let channel = handle
         .channel_open_session()
         .await
-        .map_err(|e| format!("打开会话失败：{e}"))?;
+        .map_err(|e| format!("err.channel_open|{e}"))?;
     channel
         .request_pty(
             false,
@@ -194,11 +194,11 @@ pub async fn establish(params: &ConnectParams, cols: u32, rows: u32) -> Result<E
             &[],
         )
         .await
-        .map_err(|e| format!("申请伪终端失败：{e}"))?;
+        .map_err(|e| format!("err.pty_request|{e}"))?;
     channel
         .request_shell(false)
         .await
-        .map_err(|e| format!("申请 Shell 失败：{e}"))?;
+        .map_err(|e| format!("err.shell_request|{e}"))?;
 
     let (read, write) = channel.split();
     Ok(Established {
@@ -215,7 +215,7 @@ pub async fn test(params: &ConnectParams) -> TestResult {
     match result {
         Err(_) => TestResult {
             ok: false,
-            message: "连接超时：15 秒内未能完成 SSH 握手".into(),
+            message: "err.handshake_timeout|15".into(),
             latency_ms: latency(started),
         },
         Ok(Err(message)) => TestResult {
@@ -230,7 +230,7 @@ pub async fn test(params: &ConnectParams) -> TestResult {
                 .await;
             TestResult {
                 ok: true,
-                message: "连接成功：SSH 握手与认证均已通过".into(),
+                message: "test.success".into(),
                 latency_ms: latency(started),
             }
         }
@@ -259,7 +259,7 @@ pub fn spawn_reader(app: AppHandle, session: Arc<SshSession>, mut read: ChannelR
     tokio::spawn(async move {
         let mut buf: Vec<u8> = Vec::with_capacity(16 * 1024);
         let mut ticker = tokio::time::interval(Duration::from_millis(16));
-        let mut reason = "连接已断开".to_string();
+        let mut reason = "err.connection_closed".to_string();
 
         loop {
             tokio::select! {
@@ -275,12 +275,12 @@ pub fn spawn_reader(app: AppHandle, session: Arc<SshSession>, mut read: ChannelR
                             }
                         }
                         Some(ChannelMsg::Eof) | Some(ChannelMsg::Close) => {
-                            reason = "远端关闭了会话".into();
+                            reason = "err.remote_closed".into();
                             break;
                         }
                         Some(_) => {}
                         None => {
-                            reason = "连接已断开".into();
+                            reason = "err.connection_closed".into();
                             break;
                         }
                     }

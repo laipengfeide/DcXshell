@@ -5,6 +5,7 @@ import type {
   ConnectionItem,
   DirListing,
   LanPeer,
+  LanSettings,
   LanStatus,
   PingResult,
   SessionInfo,
@@ -72,5 +73,9 @@ export const lanSendFile = (path: string, peerId: string) =>
   invoke<string>("lan_send_file", { path, peerId })
 export const lanRespond = (id: string, accept: boolean, saveDir?: string | null) =>
   invoke<void>("lan_respond", { id, accept, saveDir: saveDir ?? null })
+export const lanSettings = () => invoke<LanSettings>("lan_settings")
+export const lanSetSaveDir = (dir: string) => invoke<LanSettings>("lan_set_save_dir", { dir })
+export const lanResetSaveDir = () => invoke<LanSettings>("lan_reset_save_dir")
+export const lanCheckDir = (dir: string) => invoke<void>("lan_check_dir", { dir })
 
 export const openPath = (path: string) => invoke<void>("open_path", { path })

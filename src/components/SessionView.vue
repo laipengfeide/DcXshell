@@ -7,6 +7,7 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event"
 import { readText, writeText } from "@tauri-apps/plugin-clipboard-manager"
 import { ElMessage } from "element-plus"
 import * as api from "@/api"
+import { t, tErr } from "@/i18n"
 import FileTransferDialog from "./FileTransferDialog.vue"
 import type {
   SessionClosedEvent,
@@ -59,15 +60,7 @@ const SHELL_PROMPT = /(?:[$#%>»])\s$/
 const ctx = reactive({ visible: false, x: 0, y: 0, hasSelection: false })
 const showFiles = ref(false)
 
-const statusLabel = computed(
-  () =>
-    ({
-      connecting: "连接中",
-      online: "在线",
-      reconnecting: "重连中",
-      offline: "已掉线",
-    })[status.value]
-)
+const statusLabel = computed(() => t(`session.status.${status.value}`))
 
 const sleep = (ms: number) => new Promise((resolve) => window.setTimeout(resolve, ms))
 
@@ -187,7 +180,7 @@ async function copySelection(): Promise<boolean> {
       await navigator.clipboard.writeText(text)
       return true
     } catch {
-      ElMessage.error("复制失败：无法访问剪贴板")
+      ElMessage.error(t("session.err.clipboard"))
       return false
     }
   }
@@ -243,8 +236,8 @@ async function connectInitial() {
     latency.value = 0
     if (props.active) term?.focus()
   } catch (err) {
-    setOffline(String(err))
-    ElMessage.error(String(err))
+    setOffline(tErr(err))
+    ElMessage.error(tErr(err))
   }
 }
 
@@ -271,16 +264,16 @@ async function ping() {
       latency.value = res.latencyMs
       emit("status", props.sessionKey, "online", res.latencyMs)
     } else {
-      handleLost(res.message || "心跳检测失败")
+      handleLost(res.message ? tErr(res.message) : t("session.heartbeat.failed"))
     }
   } catch (err) {
-    handleLost(String(err))
+    handleLost(tErr(err))
   }
 }
 
 function handleLost(reason: string) {
   if (disposed || reconnecting || status.value === "offline") return
-  term?.write(`\r\n\x1b[33m[Dc Xshell] ${reason}，开始自动重连...\x1b[0m\r\n`)
+  term?.write(`\r\n\x1b[33m[Dc Xshell] ${t("session.lost.auto_reconnect", { reason })}\x1b[0m\r\n`)
   pushStatus("reconnecting")
   void attemptReconnect()
 }
@@ -292,7 +285,7 @@ async function attemptReconnect() {
   while (attempt < 3 && !disposed) {
     attempt += 1
     pushStatus("reconnecting")
-    term?.write(`\x1b[33m[Dc Xshell] 正在第 ${attempt}/3 次重连...\x1b[0m\r\n`)
+    term?.write(`\x1b[33m[Dc Xshell] ${t("session.reconnect.attempt", { attempt, max: 3 })}\x1b[0m\r\n`)
     await sleep(1200)
     if (disposed) return
     try {
@@ -301,22 +294,24 @@ async function attemptReconnect() {
       reconnecting = false
       pushStatus("online")
       latency.value = 0
-      term?.write(`\x1b[32m[Dc Xshell] 重连成功，会话已恢复\x1b[0m\r\n`)
+      term?.write(`\x1b[32m[Dc Xshell] ${t("session.reconnect.success")}\x1b[0m\r\n`)
       if (props.active) term?.focus()
       return
     } catch (err) {
-      term?.write(`\x1b[90m[Dc Xshell] 第 ${attempt} 次重连失败：${err}\x1b[0m\r\n`)
+      term?.write(
+        `\x1b[90m[Dc Xshell] ${t("session.reconnect.fail", { attempt, error: tErr(err) })}\x1b[0m\r\n`
+      )
     }
   }
   reconnecting = false
-  if (!disposed) setOffline("连续 3 次重连均失败，卡片已标记为掉线")
+  if (!disposed) setOffline(t("session.reconnect.exhausted", { max: 3 }))
 }
 
 async function manualReconnect() {
   if (reconnecting) return
   reconnecting = false
   pushStatus("reconnecting")
-  term?.write("\r\n\x1b[36m[Dc Xshell] 手动发起重连...\x1b[0m\r\n")
+  term?.write(`\r\n\x1b[36m[Dc Xshell] ${t("session.reconnect.manual")}\x1b[0m\r\n`)
   await attemptReconnect()
 }
 
@@ -337,7 +332,7 @@ async function runCtx(action: "copy" | "paste" | "selectAll" | "clear" | "reconn
   closeCtx()
   if (action === "copy") {
     const ok = await copySelection()
-    if (ok) ElMessage.success("已复制选中内容")
+    if (ok) ElMessage.success(t("session.copy.success"))
   }
   if (action === "paste") await pasteClipboard()
   if (action === "selectAll") term?.selectAll()
@@ -420,8 +415,8 @@ function submitCommandLine() {
   cmdUnknown = false
 
   if (wasSecret) {
-    const suffix = lastCommand ? `；关联命令：${lastCommand}` : ""
-    sendAudit(`••••••（密码输入，已隐藏${suffix}）`)
+    const suffix = lastCommand ? t("session.audit.link", { command: lastCommand }) : ""
+    sendAudit(t("session.audit.secret", { suffix }))
     return
   }
 
@@ -506,11 +501,11 @@ async function bindSessionEvents() {
     if (disposed || payload.clientKey !== props.sessionKey) return
     // 旧会话（重连前）的关闭事件直接忽略
     if (payload.sessionId !== currentSessionId) return
-    if (payload.reason.includes("远端关闭")) {
-      setOffline("远端关闭了会话，终端已退出")
+    if (payload.reason === "err.remote_closed") {
+      setOffline(t("session.offline.remote_closed"))
       return
     }
-    handleLost(payload.reason || "连接已断开")
+    handleLost(payload.reason ? tErr(payload.reason) : t("session.lost.disconnected"))
   })
 }
 
@@ -583,10 +578,10 @@ onBeforeUnmount(() => {
         </div>
       </div>
       <div class="s-right">
-        <span v-if="status === 'online'" class="latency">心跳 {{ latency }} ms</span>
+        <span v-if="status === 'online'" class="latency">{{ t("session.header.latency", { ms: latency }) }}</span>
         <button
           class="s-btn"
-          title="文件传输：上传 / 下载"
+          :title="t('session.header.transfer.title')"
           :disabled="status !== 'online'"
           @click="showFiles = true"
         >
@@ -600,7 +595,7 @@ onBeforeUnmount(() => {
             <path d="M14 19v-6m0 0l-2.2 2.2M14 13l2.2 2.2" stroke="currentColor" stroke-width="1.6" />
           </svg>
         </button>
-        <button class="s-btn" title="重新连接" @click="manualReconnect">
+        <button class="s-btn" :title="t('session.header.reconnect.title')" @click="manualReconnect">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none">
             <path
               d="M20 11a8 8 0 10-2.3 5.7M20 5v6h-6"
@@ -610,12 +605,12 @@ onBeforeUnmount(() => {
             />
           </svg>
         </button>
-        <button class="s-btn" title="清屏" @click="clearScreen">
+        <button class="s-btn" :title="t('session.header.clear.title')" @click="clearScreen">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none">
             <path d="M4 7h16M6 7l1 12h10l1-12M9 7V5h6v2" stroke="currentColor" stroke-width="1.6" />
           </svg>
         </button>
-        <button class="s-btn danger" title="关闭窗口" @click="emit('close', sessionKey)">
+        <button class="s-btn danger" :title="t('session.header.close.title')" @click="emit('close', sessionKey)">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none">
             <path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="1.7" />
           </svg>
@@ -627,7 +622,7 @@ onBeforeUnmount(() => {
       <div ref="holder" class="term-holder"></div>
       <div v-if="status === 'offline'" class="offline-flag">
         <span class="offline-dot"></span>
-        连接已断开 · 可点击右上角重连
+        {{ t("session.offline.flag") }}
       </div>
     </div>
 
@@ -638,13 +633,13 @@ onBeforeUnmount(() => {
       @click.stop
     >
       <button :disabled="!ctx.hasSelection" @click="runCtx('copy')">
-        复制<span class="sc">Ctrl+C</span>
+        {{ t("session.ctx.copy") }}<span class="sc">Ctrl+C</span>
       </button>
-      <button @click="runCtx('paste')">粘贴<span class="sc">Ctrl+V</span></button>
-      <button @click="runCtx('selectAll')">全选</button>
-      <button @click="runCtx('clear')">清屏</button>
+      <button @click="runCtx('paste')">{{ t("session.ctx.paste") }}<span class="sc">Ctrl+V</span></button>
+      <button @click="runCtx('selectAll')">{{ t("session.ctx.selectall") }}</button>
+      <button @click="runCtx('clear')">{{ t("session.ctx.clear") }}</button>
       <div class="sep"></div>
-      <button @click="runCtx('reconnect')">重新连接</button>
+      <button @click="runCtx('reconnect')">{{ t("session.ctx.reconnect") }}</button>
     </div>
 
     <FileTransferDialog

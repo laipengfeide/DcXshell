@@ -2,6 +2,7 @@
 import { ref } from "vue"
 import { ElMessage } from "element-plus"
 import * as api from "@/api"
+import { t, tErr } from "@/i18n"
 import type { UserInfo } from "@/types"
 
 const props = defineProps<{ canBack: boolean }>()
@@ -24,15 +25,15 @@ function switchMode(next: "login" | "register") {
 async function submit() {
   const name = username.value.trim()
   if (!name) {
-    ElMessage.warning("请输入用户名")
+    ElMessage.warning(t("login.err.usernameRequired"))
     return
   }
   if (mode.value === "register" && name.length < 3) {
-    ElMessage.warning("用户名至少 3 个字符")
+    ElMessage.warning(t("login.err.usernameTooShort"))
     return
   }
   if (password.value.length < 6) {
-    ElMessage.warning("密码至少需要 6 位")
+    ElMessage.warning(t("login.err.passwordTooShort"))
     return
   }
   loading.value = true
@@ -41,10 +42,12 @@ async function submit() {
       mode.value === "login"
         ? await api.login(name, password.value)
         : await api.register(name, password.value)
-    ElMessage.success(mode.value === "login" ? `欢迎回来，${user.username}` : "注册成功，已自动登录")
+    ElMessage.success(
+      mode.value === "login" ? t("login.welcome", { name: user.username }) : t("login.registered")
+    )
     emit("success", user)
   } catch (err) {
-    ElMessage.error(String(err))
+    ElMessage.error(tErr(err))
   } finally {
     loading.value = false
   }
@@ -63,10 +66,10 @@ async function submit() {
           <span class="hero-mark">&gt;_</span>
           <span class="hero-title">Dc <b>Xshell</b></span>
         </div>
-        <p class="tagline">轻量、稳定、无需 USB Key 的 SSH 终端</p>
+        <p class="tagline">{{ t("login.tagline") }}</p>
         <p class="hero-desc">
-          为运维、测试与研发打造的桌面连接工具。连接前先自检，掉线自动重连，<br />
-          像使用本地终端一样顺手。
+          {{ t("login.desc1") }}<br />
+          {{ t("login.desc2") }}
         </p>
 
         <ul class="feature-list">
@@ -78,8 +81,8 @@ async function submit() {
               </svg>
             </span>
             <div>
-              <strong>免 USB Key</strong>
-              <p>账号、密钥与连接配置全部保存在本机 SQLite，随开随用。</p>
+              <strong>{{ t("login.feature.usbkey.title") }}</strong>
+              <p>{{ t("login.feature.usbkey.desc") }}</p>
             </div>
           </li>
           <li>
@@ -89,8 +92,8 @@ async function submit() {
               </svg>
             </span>
             <div>
-              <strong>心跳保活</strong>
-              <p>15 秒 SSH 保活、5 秒心跳探测，断线自动重连 3 次。</p>
+              <strong>{{ t("login.feature.heartbeat.title") }}</strong>
+              <p>{{ t("login.feature.heartbeat.desc") }}</p>
             </div>
           </li>
           <li>
@@ -102,8 +105,8 @@ async function submit() {
               </svg>
             </span>
             <div>
-              <strong>多窗口并行</strong>
-              <p>访客最多 3 个并行窗口，登录后无限打开。</p>
+              <strong>{{ t("login.feature.multi.title") }}</strong>
+              <p>{{ t("login.feature.multi.desc") }}</p>
             </div>
           </li>
         </ul>
@@ -113,38 +116,38 @@ async function submit() {
     <section class="panel">
       <div class="form-card">
         <header class="form-head">
-          <h2>{{ mode === "login" ? "登录 Dc Xshell" : "创建本地账户" }}</h2>
+          <h2>{{ mode === "login" ? t("login.form.title.login") : t("login.form.title.register") }}</h2>
           <p>
-            {{ mode === "login" ? "登录后不限并行窗口数量" : "账户仅保存在本机，不会上传" }}
+            {{ mode === "login" ? t("login.form.subtitle.login") : t("login.form.subtitle.register") }}
           </p>
         </header>
 
         <div class="seg">
-          <button :class="{ active: mode === 'login' }" @click="switchMode('login')">登录</button>
-          <button :class="{ active: mode === 'register' }" @click="switchMode('register')">注册</button>
+          <button :class="{ active: mode === 'login' }" @click="switchMode('login')">{{ t("login.seg.login") }}</button>
+          <button :class="{ active: mode === 'register' }" @click="switchMode('register')">{{ t("login.seg.register") }}</button>
         </div>
 
-        <label class="field-label">用户名</label>
+        <label class="field-label">{{ t("login.label.username") }}</label>
         <el-input
           v-model="username"
           size="large"
-          placeholder="请输入用户名"
+          :placeholder="t('login.ph.username')"
           autocomplete="off"
           @keyup.enter="submit"
         />
 
-        <label class="field-label">密码</label>
+        <label class="field-label">{{ t("login.label.password") }}</label>
         <el-input
           v-model="password"
           size="large"
           type="password"
           show-password
-          placeholder="至少 6 位"
+          :placeholder="t('login.ph.password')"
           @keyup.enter="submit"
         />
 
         <el-button class="submit" type="primary" size="large" :loading="loading" @click="submit">
-          {{ mode === "login" ? "登录" : "注册并登录" }}
+          {{ mode === "login" ? t("login.submit.login") : t("login.submit.register") }}
         </el-button>
 
         <div class="local-hint">
@@ -152,20 +155,20 @@ async function submit() {
             <rect x="4" y="10" width="16" height="10" rx="2" stroke="#5e7280" stroke-width="1.6" />
             <path d="M8 10V7a4 4 0 018 0v3" stroke="#5e7280" stroke-width="1.6" />
           </svg>
-          本地账户 · 密码使用 Argon2 加密存储
+          {{ t("login.localHint") }}
         </div>
 
-        <div class="divider"><span>或</span></div>
+        <div class="divider"><span>{{ t("login.or") }}</span></div>
 
         <button class="guest-btn" @click="emit('guest')">
-          以访客身份进入
-          <span class="guest-note">最多 3 个并行窗口</span>
+          {{ t("login.guest.enter") }}
+          <span class="guest-note">{{ t("login.guest.note") }}</span>
         </button>
 
-        <button v-if="props.canBack" class="back-btn" @click="emit('back')">返回工作台</button>
+        <button v-if="props.canBack" class="back-btn" @click="emit('back')">{{ t("login.back") }}</button>
       </div>
 
-      <footer class="panel-foot">Dc Xshell · Desktop SSH Client</footer>
+      <footer class="panel-foot">{{ t("login.footer") }}</footer>
     </section>
   </div>
 </template>

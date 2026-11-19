@@ -5,6 +5,7 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event"
 import { ElMessage, ElMessageBox } from "element-plus"
 import { Delete, CopyDocument, Document, DocumentCopy, EditPen, Folder, FolderAdd, FolderOpened, Refresh, Top, Upload } from "@element-plus/icons-vue"
 import * as api from "@/api"
+import { t, tErr } from "@/i18n"
 import type { DirListing, RemoteEntry, TransferEvent } from "@/types"
 
 const props = defineProps<{
@@ -93,7 +94,7 @@ async function load(target?: string) {
     entries.value = listing.entries
     if (listing.commonDirs?.length) commonDirs.value = listing.commonDirs
   } catch (err) {
-    errorMsg.value = String(err)
+    errorMsg.value = tErr(err)
     entries.value = []
   } finally {
     loading.value = false
@@ -114,7 +115,7 @@ async function uploadFiles() {
   const picked = await open({
     multiple: true,
     directory: false,
-    title: `选择要上传到 ${currentPath.value} 的文件`,
+    title: t("file.pick.upload", { path: currentPath.value }),
   })
   if (!picked) return
   const paths = Array.isArray(picked) ? picked : [picked]
@@ -124,17 +125,17 @@ async function uploadFiles() {
   percent.value = 0
   transferred.value = 0
   totalBytes.value = 0
-  transferName.value = paths.length > 1 ? `${paths.length} 个文件` : fileBase(paths[0])
+  transferName.value = paths.length > 1 ? t("file.nFiles", { count: paths.length }) : fileBase(paths[0])
   try {
     const results = await api.sftpUpload(props.clientKey, paths, currentPath.value)
     ElMessage.success(
       results.length > 1
-        ? `已上传 ${results.length} 个文件到 ${currentPath.value}`
-        : `已上传 ${results[0].name} 到 ${currentPath.value}`
+        ? t("file.msg.uploadMany", { count: results.length, path: currentPath.value })
+        : t("file.msg.uploadOne", { name: results[0].name, path: currentPath.value })
     )
     await load()
   } catch (err) {
-    ElMessage.error(String(err))
+    ElMessage.error(tErr(err))
   } finally {
     busy.value = ""
     percent.value = -1
@@ -144,7 +145,7 @@ async function uploadFiles() {
 async function downloadSelected() {
   const entry = selected.value
   if (!entry || entry.isDir || busy.value) return
-  const target = await save({ defaultPath: entry.name, title: "选择下载保存位置" })
+  const target = await save({ defaultPath: entry.name, title: t("file.pick.download") })
   if (!target) return
 
   busy.value = "download"
@@ -154,9 +155,9 @@ async function downloadSelected() {
   transferName.value = entry.name
   try {
     const result = await api.sftpDownload(props.clientKey, entry.path, target)
-    ElMessage.success(`已下载 ${result.name} 到本地`)
+    ElMessage.success(t("file.msg.downloaded", { name: result.name }))
   } catch (err) {
-    ElMessage.error(String(err))
+    ElMessage.error(tErr(err))
   } finally {
     busy.value = ""
     percent.value = -1
@@ -179,15 +180,15 @@ async function renameEntry() {
   if (!entry || busy.value) return
   let newName = ""
   try {
-    const result = await ElMessageBox.prompt(`将「${entry.name}」重命名为：`, "重命名", {
+    const result = await ElMessageBox.prompt(t("file.rename.prompt", { name: entry.name }), t("file.rename.title"), {
       inputValue: entry.name,
-      confirmButtonText: "确定",
-      cancelButtonText: "取消",
+      confirmButtonText: t("file.btn.confirm"),
+      cancelButtonText: t("file.btn.cancel"),
       inputValidator: (v: string) => {
         const n = (v ?? "").trim()
-        if (!n) return "名称不能为空"
-        if (n.includes("/") || n.includes("\\")) return "名称不能包含路径分隔符"
-        if (n === entry.name) return "新名称与原名称相同"
+        if (!n) return t("file.rename.errEmpty")
+        if (n.includes("/") || n.includes("\\")) return t("file.rename.errSlash")
+        if (n === entry.name) return t("file.rename.errSame")
         return true
       },
     })
@@ -197,10 +198,10 @@ async function renameEntry() {
   }
   try {
     const r = await api.sftpRename(props.clientKey, entry.path, newName)
-    ElMessage.success(`已重命名为 ${r.name}`)
+    ElMessage.success(t("file.msg.renamed", { name: r.name }))
     await load()
   } catch (err) {
-    ElMessage.error(String(err))
+    ElMessage.error(tErr(err))
   }
 }
 
@@ -211,20 +212,20 @@ async function removeEntry() {
   try {
     await ElMessageBox.confirm(
       entry.isDir
-        ? `确定删除目录「${entry.name}」吗？仅支持删除空目录。`
-        : `确定删除文件「${entry.name}」吗？删除后无法恢复。`,
-      "删除确认",
-      { confirmButtonText: "删除", cancelButtonText: "取消", type: "warning" }
+        ? t("file.remove.confirmDir", { name: entry.name })
+        : t("file.remove.confirmFile", { name: entry.name }),
+      t("file.remove.title"),
+      { confirmButtonText: t("file.remove.confirm"), cancelButtonText: t("file.btn.cancel"), type: "warning" }
     )
   } catch {
     return
   }
   try {
     await api.sftpRemove(props.clientKey, entry.path, entry.isDir)
-    ElMessage.success(`已删除 ${entry.name}`)
+    ElMessage.success(t("file.msg.removed", { name: entry.name }))
     await load()
   } catch (err) {
-    ElMessage.error(String(err))
+    ElMessage.error(tErr(err))
   }
 }
 
@@ -233,11 +234,11 @@ function copyEntry() {
   closeMenu()
   if (!entry) return
   if (entry.isDir) {
-    ElMessage.warning("暂不支持复制目录，请逐个复制目录中的文件")
+    ElMessage.warning(t("file.copy.dirUnsupported"))
     return
   }
   clip.value = { ...entry }
-  ElMessage.success(`已复制 ${entry.name}，切换到目标目录后右键或点「粘贴」`)
+  ElMessage.success(t("file.msg.copied", { name: entry.name }))
 }
 
 async function pasteEntry() {
@@ -251,19 +252,17 @@ async function pasteEntry() {
   if (duplicate) {
     try {
       await ElMessageBox.confirm(
-        `当前目录已存在同名文件「${source.name}」。\n「覆盖」将替换原文件；「重命名新文件」将保存为 ${nextName(
-          source.name
-        )}；点右上角关闭或按 Esc 取消。`,
-        "同名文件处理",
+        t("file.conflict.message", { name: source.name, next: nextName(source.name) }),
+        t("file.conflict.title"),
         {
-          confirmButtonText: "覆盖",
-          cancelButtonText: "重命名新文件",
+          confirmButtonText: t("file.conflict.overwrite"),
+          cancelButtonText: t("file.conflict.rename"),
           distinguishCancelAndClose: true,
           type: "warning",
         }
       )
       if (sameDir) {
-        ElMessage.warning("同一目录内不能覆盖自身，请改用「重命名新文件」")
+        ElMessage.warning(t("file.conflict.sameDir"))
         return
       }
     } catch (action) {
@@ -282,10 +281,10 @@ async function pasteEntry() {
   transferName.value = source.name
   try {
     const result = await api.sftpCopy(props.clientKey, source.path, currentPath.value, policy)
-    ElMessage.success(`已粘贴为 ${result.name}`)
+    ElMessage.success(t("file.msg.pasted", { name: result.name }))
     await load()
   } catch (err) {
-    ElMessage.error(String(err))
+    ElMessage.error(tErr(err))
   } finally {
     busy.value = ""
     percent.value = -1
@@ -324,15 +323,15 @@ async function extractEntry(mode: "here" | "folder") {
   if (mode === "folder") {
     const folder = archiveStem(entry.name)
     if (entries.value.some((item) => item.isDir && item.name === folder)) {
-      ElMessage.warning(`同名文件夹「${folder}」已存在，请先删除或重命名后再解压`)
+      ElMessage.warning(t("file.extract.folderExists", { folder }))
       return
     }
   } else {
     try {
       await ElMessageBox.confirm(
-        `将「${entry.name}」解压到当前目录 ${currentPath.value}，如遇同名文件会直接覆盖，是否继续？`,
-        "解压到当前文件夹",
-        { confirmButtonText: "开始解压", cancelButtonText: "取消", type: "warning" }
+        t("file.extract.confirm", { name: entry.name, path: currentPath.value }),
+        t("file.extract.title"),
+        { confirmButtonText: t("file.extract.start"), cancelButtonText: t("file.btn.cancel"), type: "warning" }
       )
     } catch {
       return
@@ -346,10 +345,10 @@ async function extractEntry(mode: "here" | "folder") {
   transferName.value = entry.name
   try {
     const dir = await api.sftpExtract(props.clientKey, entry.path, mode)
-    ElMessage.success(`已解压 ${entry.name} 到 ${dir}`)
+    ElMessage.success(t("file.msg.extracted", { name: entry.name, dir }))
     await load()
   } catch (err) {
-    ElMessage.error(String(err))
+    ElMessage.error(tErr(err))
   } finally {
     busy.value = ""
     percent.value = -1
@@ -414,7 +413,7 @@ onBeforeUnmount(() => {
     <template #header>
       <div class="ft-head">
         <div>
-          <h3>文件传输</h3>
+          <h3>{{ t("file.title") }}</h3>
           <p>{{ username }}@{{ host }} · SFTP</p>
         </div>
       </div>
@@ -422,7 +421,7 @@ onBeforeUnmount(() => {
 
     <div class="ft-body">
       <aside class="ft-side">
-        <h4>常用目录</h4>
+        <h4>{{ t("file.commonDirs") }}</h4>
         <button
           v-for="dir in commonDirs"
           :key="dir"
@@ -433,12 +432,12 @@ onBeforeUnmount(() => {
           <el-icon><FolderOpened /></el-icon>
           <span>{{ dir }}</span>
         </button>
-        <p class="side-tip">默认上传目录为 <b>/home</b></p>
+        <p class="side-tip">{{ t("file.sideTipPrefix") }} <b>/home</b></p>
       </aside>
 
       <main class="ft-main">
         <div class="ft-bar">
-          <button class="icon-btn" title="上一级" :disabled="currentPath === '/' || loading" @click="load(parentPath)">
+          <button class="icon-btn" :title="t('file.tip.parent')" :disabled="currentPath === '/' || loading" @click="load(parentPath)">
             <el-icon><Top /></el-icon>
           </button>
           <div class="crumbs">
@@ -454,19 +453,19 @@ onBeforeUnmount(() => {
           </div>
           <button
             class="icon-btn"
-            :title="clip ? `粘贴 ${clip.name} 到 ${currentPath}` : '先在文件上右键复制'"
+            :title="clip ? t('file.tip.paste', { name: clip.name, path: currentPath }) : t('file.tip.pasteEmpty')"
             :disabled="!clip || loading || !!busy"
             @click="pasteEntry"
           >
             <el-icon><DocumentCopy /></el-icon>
           </button>
-          <button class="icon-btn" title="刷新" :disabled="loading" @click="load()">
+          <button class="icon-btn" :title="t('file.tip.refresh')" :disabled="loading" @click="load()">
             <el-icon><Refresh /></el-icon>
           </button>
         </div>
 
         <div class="ft-table">
-          <div v-if="loading" class="ft-tip">正在读取服务器目录…</div>
+          <div v-if="loading" class="ft-tip">{{ t("file.loading") }}</div>
           <div v-else-if="errorMsg" class="ft-tip err">{{ errorMsg }}</div>
           <el-table
             v-else
@@ -478,7 +477,7 @@ onBeforeUnmount(() => {
             @row-dblclick="onRowDblClick"
             @row-contextmenu="onRowContextMenu"
           >
-            <el-table-column label="名称" min-width="260">
+            <el-table-column :label="t('file.col.name')" min-width="260">
               <template #default="{ row }">
                 <span class="entry" :class="{ dir: row.isDir }">
                   <el-icon>
@@ -486,14 +485,14 @@ onBeforeUnmount(() => {
                     <Document v-else />
                   </el-icon>
                   <span class="entry-name">{{ row.name }}</span>
-                  <span v-if="row.isLink" class="tag">链接</span>
+                  <span v-if="row.isLink" class="tag">{{ t("file.tag.link") }}</span>
                 </span>
               </template>
             </el-table-column>
-            <el-table-column label="大小" width="110" align="right">
+            <el-table-column :label="t('file.col.size')" width="110" align="right">
               <template #default="{ row }">{{ row.isDir ? "—" : humanSize(row.size) }}</template>
             </el-table-column>
-            <el-table-column label="修改时间" width="160">
+            <el-table-column :label="t('file.col.time')" width="160">
               <template #default="{ row }">{{ formatTime(row.modified) }}</template>
             </el-table-column>
           </el-table>
@@ -502,7 +501,7 @@ onBeforeUnmount(() => {
         <div v-if="busy" class="ft-mask">
           <div class="ft-transfer">
             <div class="t-title">
-              {{ busy === "upload" ? "正在上传" : busy === "copy" ? "正在复制" : busy === "extract" ? "正在解压" : "正在下载" }}
+              {{ busy === "upload" ? t("file.busy.upload") : busy === "copy" ? t("file.busy.copy") : busy === "extract" ? t("file.busy.extract") : t("file.busy.download") }}
             </div>
             <div class="t-name" :title="transferName">{{ transferName }}</div>
             <el-progress
@@ -522,12 +521,12 @@ onBeforeUnmount(() => {
 
         <div class="ft-actions">
           <el-button type="primary" :icon="Upload" :disabled="!!busy" @click="uploadFiles">
-            上传文件到 {{ currentPath }}
+            {{ t("file.btn.upload", { path: currentPath }) }}
           </el-button>
           <el-button :disabled="!selected || selected.isDir || !!busy" @click="downloadSelected">
-            下载选中文件
+            {{ t("file.btn.download") }}
           </el-button>
-          <span class="hint">双击目录进入，右键文件可复制 / 粘贴 / 解压 / 重命名 / 删除</span>
+          <span class="hint">{{ t("file.hint") }}</span>
         </div>
       </main>
     </div>
@@ -541,27 +540,27 @@ onBeforeUnmount(() => {
       >
         <button @click="copyEntry">
           <el-icon><CopyDocument /></el-icon>
-          <span>复制</span>
+          <span>{{ t("file.menu.copy") }}</span>
         </button>
         <button :disabled="!clip" @click="pasteEntry">
           <el-icon><DocumentCopy /></el-icon>
-          <span>粘贴{{ clip ? ` ${clip.name}` : "" }}</span>
+          <span>{{ clip ? t("file.menu.pasteName", { name: clip.name }) : t("file.menu.paste") }}</span>
         </button>
         <button v-if="isArchive(menu.entry.name)" @click="extractEntry('here')">
           <el-icon><FolderOpened /></el-icon>
-          <span>解压到当前文件夹</span>
+          <span>{{ t("file.menu.extractHere") }}</span>
         </button>
         <button v-if="isArchive(menu.entry.name)" @click="extractEntry('folder')">
           <el-icon><FolderAdd /></el-icon>
-          <span>解压到同名文件夹</span>
+          <span>{{ t("file.menu.extractFolder") }}</span>
         </button>
         <button @click="renameEntry">
           <el-icon><EditPen /></el-icon>
-          <span>重命名</span>
+          <span>{{ t("file.menu.rename") }}</span>
         </button>
         <button class="danger" @click="removeEntry">
           <el-icon><Delete /></el-icon>
-          <span>删除</span>
+          <span>{{ t("file.menu.delete") }}</span>
         </button>
       </div>
     </teleport>

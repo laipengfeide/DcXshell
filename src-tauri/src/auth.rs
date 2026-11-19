@@ -16,10 +16,10 @@ fn row_to_user(row: &rusqlite::Row<'_>) -> rusqlite::Result<UserInfo> {
 pub fn register(conn: &Connection, username: &str, password: &str) -> Result<UserInfo, String> {
     let username = username.trim();
     if !(3..=24).contains(&username.chars().count()) {
-        return Err("用户名长度需为 3 - 24 个字符".into());
+        return Err("err.username_length".into());
     }
     if password.chars().count() < 6 {
-        return Err("密码至少需要 6 位".into());
+        return Err("err.password_too_short".into());
     }
     let exists: bool = conn
         .query_row(
@@ -28,28 +28,28 @@ pub fn register(conn: &Connection, username: &str, password: &str) -> Result<Use
             |_| Ok(true),
         )
         .optional()
-        .map_err(|e| e.to_string())?
+        .map_err(|e| format!("err.db|{e}"))?
         .unwrap_or(false);
     if exists {
-        return Err("该用户名已被注册".into());
+        return Err("err.username_taken".into());
     }
     let salt = SaltString::generate(&mut OsRng);
     let hash = Argon2::default()
         .hash_password(password.as_bytes(), &salt)
-        .map_err(|e| format!("密码加密失败: {e}"))?
+        .map_err(|e| format!("err.hash_password|{e}"))?
         .to_string();
     let created_at = db::now();
     conn.execute(
         "INSERT INTO users(username, password_hash, created_at) VALUES (?1, ?2, ?3)",
         params![username, hash, created_at],
     )
-    .map_err(|e| e.to_string())?;
+    .map_err(|e| format!("err.db|{e}"))?;
     let user = UserInfo {
         id: conn.last_insert_rowid(),
         username: username.to_string(),
         created_at,
     };
-    db::set_setting(conn, "active_user_id", &user.id.to_string()).map_err(|e| e.to_string())?;
+    db::set_setting(conn, "active_user_id", &user.id.to_string()).map_err(|e| format!("err.db|{e}"))?;
     Ok(user)
 }
 
@@ -62,15 +62,15 @@ pub fn login(conn: &Connection, username: &str, password: &str) -> Result<UserIn
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )
         .optional()
-        .map_err(|e| e.to_string())?
-        .ok_or_else(|| "用户名或密码错误".to_string())?;
+        .map_err(|e| format!("err.db|{e}"))?
+        .ok_or_else(|| "err.bad_credentials".to_string())?;
 
-    let parsed = PasswordHash::new(&hash).map_err(|e| format!("密码校验失败: {e}"))?;
+    let parsed = PasswordHash::new(&hash).map_err(|e| format!("err.verify_password|{e}"))?;
     Argon2::default()
         .verify_password(password.as_bytes(), &parsed)
-        .map_err(|_| "用户名或密码错误".to_string())?;
+        .map_err(|_| "err.bad_credentials".to_string())?;
 
-    db::set_setting(conn, "active_user_id", &id.to_string()).map_err(|e| e.to_string())?;
+    db::set_setting(conn, "active_user_id", &id.to_string()).map_err(|e| format!("err.db|{e}"))?;
     Ok(UserInfo {
         id,
         username: username.to_string(),
@@ -91,7 +91,7 @@ pub fn restore_session(conn: &Connection) -> Option<UserInfo> {
 }
 
 pub fn logout(conn: &Connection) -> Result<(), String> {
-    db::del_setting(conn, "active_user_id").map_err(|e| e.to_string())
+    db::del_setting(conn, "active_user_id").map_err(|e| format!("err.db|{e}"))
 }
 
 /// 记录用户最近一次登录的局域网 IP 与时间。
@@ -100,7 +100,7 @@ pub fn touch_login(conn: &Connection, user_id: i64, ip: &str) -> Result<(), Stri
         "UPDATE users SET last_ip = ?1, last_login_at = ?2 WHERE id = ?3",
         params![ip, db::now(), user_id],
     )
-    .map_err(|e| e.to_string())?;
+    .map_err(|e| format!("err.db|{e}"))?;
     Ok(())
 }
 
@@ -112,10 +112,10 @@ pub fn change_password(
     new_password: &str,
 ) -> Result<(), String> {
     if new_password.chars().count() < 6 {
-        return Err("新密码至少需要 6 位".into());
+        return Err("err.new_password_too_short".into());
     }
     if old_password == new_password {
-        return Err("新密码不能与原密码相同".into());
+        return Err("err.password_unchanged".into());
     }
     let hash: String = conn
         .query_row(
@@ -123,21 +123,21 @@ pub fn change_password(
             params![user_id],
             |row| row.get(0),
         )
-        .map_err(|e| e.to_string())?;
-    let parsed = PasswordHash::new(&hash).map_err(|e| format!("密码校验失败: {e}"))?;
+        .map_err(|e| format!("err.db|{e}"))?;
+    let parsed = PasswordHash::new(&hash).map_err(|e| format!("err.verify_password|{e}"))?;
     Argon2::default()
         .verify_password(old_password.as_bytes(), &parsed)
-        .map_err(|_| "原密码不正确".to_string())?;
+        .map_err(|_| "err.old_password_wrong".to_string())?;
 
     let salt = SaltString::generate(&mut OsRng);
     let new_hash = Argon2::default()
         .hash_password(new_password.as_bytes(), &salt)
-        .map_err(|e| format!("密码加密失败: {e}"))?
+        .map_err(|e| format!("err.hash_password|{e}"))?
         .to_string();
     conn.execute(
         "UPDATE users SET password_hash = ?1 WHERE id = ?2",
         params![new_hash, user_id],
     )
-    .map_err(|e| e.to_string())?;
+    .map_err(|e| format!("err.db|{e}"))?;
     Ok(())
 }

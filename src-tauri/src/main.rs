@@ -20,10 +20,10 @@ fn main() {
         .setup(|app| {
             let dir = app.path().app_data_dir()?;
             let conn = db::open(&dir.join("dcxshell.db")).map_err(|e| {
-                std::io::Error::new(std::io::ErrorKind::Other, format!("初始化数据库失败: {e}"))
+                std::io::Error::new(std::io::ErrorKind::Other, format!("failed to initialize database: {e}"))
             })?;
             let secrets = crypto::SecretBox::load_or_create(&dir.join("secret.key")).map_err(
-                |e| std::io::Error::new(std::io::ErrorKind::Other, format!("初始化密钥失败: {e}")),
+                |e| std::io::Error::new(std::io::ErrorKind::Other, format!("failed to initialize secret key: {e}")),
             )?;
             let device_id = db::ensure_device_id(&conn);
             let lan = lan::LanState::start(
@@ -65,6 +65,10 @@ fn main() {
             commands::notify_ready,
             commands::lan_status,
             commands::lan_peers,
+            commands::lan_settings,
+            commands::lan_set_save_dir,
+            commands::lan_reset_save_dir,
+            commands::lan_check_dir,
             commands::lan_send_file,
             commands::lan_respond,
             commands::open_path,
@@ -77,5 +81,5 @@ fn main() {
             sftp::sftp_extract,
         ])
         .run(tauri::generate_context!())
-        .expect("Dc Xshell 启动失败");
+        .expect("Dc Xshell failed to start");
 }

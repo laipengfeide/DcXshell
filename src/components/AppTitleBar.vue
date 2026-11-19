@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { getCurrentWindow } from "@tauri-apps/api/window"
 import { onMounted, ref } from "vue"
+import { t } from "@/i18n"
 
 const win = getCurrentWindow()
 const maximized = ref(false)
@@ -52,10 +53,10 @@ onMounted(() => {
     </div>
     <div class="drag" data-tauri-drag-region @dblclick="toggleMaximize"></div>
     <div class="win-controls">
-      <button class="wc" title="最小化" @click="minimize">
+      <button class="wc" :title="t('titlebar.minimize')" @click="minimize">
         <svg width="11" height="11" viewBox="0 0 11 11"><path d="M1 5.5h9" stroke="currentColor" stroke-width="1.2" /></svg>
       </button>
-      <button class="wc" :title="maximized ? '还原' : '最大化'" @click="toggleMaximize">
+      <button class="wc" :title="maximized ? t('titlebar.restore') : t('titlebar.maximize')" @click="toggleMaximize">
         <svg v-if="!maximized" width="11" height="11" viewBox="0 0 11 11">
           <rect x="1.4" y="1.4" width="8.2" height="8.2" fill="none" stroke="currentColor" stroke-width="1.2" />
         </svg>
@@ -64,7 +65,7 @@ onMounted(() => {
           <path d="M3.5 1.5h6v6" fill="none" stroke="currentColor" stroke-width="1.1" />
         </svg>
       </button>
-      <button class="wc close" title="关闭" @click="closeWindow">
+      <button class="wc close" :title="t('titlebar.close')" @click="closeWindow">
         <svg width="11" height="11" viewBox="0 0 11 11"><path d="M1.6 1.6l7.8 7.8M9.4 1.6L1.6 9.4" stroke="currentColor" stroke-width="1.2" /></svg>
       </button>
     </div>

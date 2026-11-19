@@ -3,6 +3,7 @@ import { computed, reactive, ref, watch } from "vue"
 import { ElMessage } from "element-plus"
 import { open } from "@tauri-apps/plugin-dialog"
 import * as api from "@/api"
+import { t, tErr } from "@/i18n"
 import type { ConnectionInput, ConnectionItem, TestResult } from "@/types"
 
 const props = defineProps<{
@@ -17,7 +18,7 @@ const emit = defineEmits<{
 
 const form = reactive({
   name: "",
-  groupName: "默认分组",
+  groupName: t("conn.group.default"),
   host: "",
   port: 22,
   username: "",
@@ -34,10 +35,12 @@ const saving = ref(false)
 const result = ref<TestResult | null>(null)
 const testedFingerprint = ref("")
 
-const title = computed(() => (editingId.value ? "编辑连接" : "新建连接"))
+const title = computed(() =>
+  editingId.value ? t("conn.title.edit") : t("conn.title.new")
+)
 const passwordPlaceholder = computed(() => {
-  if (editingHasPassword.value) return "留空则沿用已保存的密码"
-  return "服务器登录密码"
+  if (editingHasPassword.value) return t("conn.ph.passwordKeep")
+  return t("conn.ph.password")
 })
 
 function fingerprint() {
@@ -65,7 +68,7 @@ watch(
     editingId.value = c?.id ?? null
     editingHasPassword.value = !!c?.hasPassword
     form.name = c?.name ?? ""
-    form.groupName = c?.groupName ?? "默认分组"
+    form.groupName = c?.groupName ?? t("conn.group.default")
     form.host = c?.host ?? ""
     form.port = c?.port ?? 22
     form.username = c?.username ?? ""
@@ -90,27 +93,27 @@ watch(
 
 function validate(needPassword = false): boolean {
   if (!form.name.trim()) {
-    ElMessage.warning("请填写连接名称")
+    ElMessage.warning(t("conn.err.nameRequired"))
     return false
   }
   if (!form.host.trim()) {
-    ElMessage.warning("请填写服务器地址")
+    ElMessage.warning(t("conn.err.hostRequired"))
     return false
   }
   if (!form.username.trim()) {
-    ElMessage.warning("请填写用户名")
+    ElMessage.warning(t("conn.err.usernameRequired"))
     return false
   }
   if (!form.port || form.port < 1 || form.port > 65535) {
-    ElMessage.warning("端口需在 1 - 65535 之间")
+    ElMessage.warning(t("conn.err.portRange"))
     return false
   }
   if (form.authType === "key" && !form.keyPath.trim()) {
-    ElMessage.warning("私钥登录需要选择私钥文件")
+    ElMessage.warning(t("conn.err.keyRequired"))
     return false
   }
   if (needPassword && form.authType === "password" && !form.password && !editingHasPassword.value) {
-    ElMessage.warning("请输入登录密码")
+    ElMessage.warning(t("conn.err.passwordRequired"))
     return false
   }
   return true
@@ -120,7 +123,7 @@ function payload(): ConnectionInput {
   return {
     id: editingId.value,
     name: form.name.trim(),
-    groupName: form.groupName.trim() || "默认分组",
+    groupName: form.groupName.trim() || t("conn.group.default"),
     host: form.host.trim(),
     port: form.port,
     username: form.username.trim(),
@@ -140,10 +143,10 @@ async function runTest() {
     result.value = res
     testedFingerprint.value = snapshot
     if (res.ok) {
-      ElMessage.success(`连接测试通过，耗时 ${res.latencyMs} ms`)
+      ElMessage.success(t("conn.test.passed", { ms: res.latencyMs }))
     }
   } catch (err) {
-    result.value = { ok: false, message: String(err), latencyMs: 0 }
+    result.value = { ok: false, message: tErr(err), latencyMs: 0 }
     testedFingerprint.value = fingerprint()
   } finally {
     testing.value = false
@@ -153,17 +156,17 @@ async function runTest() {
 async function save() {
   if (!validate(true)) return
   if (!canSave.value) {
-    ElMessage.warning("请先点击「测试连接」，测试通过后再保存")
+    ElMessage.warning(t("conn.err.testFirst"))
     return
   }
   saving.value = true
   try {
     await api.saveConnection(payload())
-    ElMessage.success("连接已保存到左侧连接树")
+    ElMessage.success(t("conn.saved"))
     emit("saved")
     emit("update:visible", false)
   } catch (err) {
-    ElMessage.error(String(err))
+    ElMessage.error(tErr(err))
   } finally {
     saving.value = false
   }
@@ -174,13 +177,13 @@ async function browseKey() {
     const picked = await open({
       multiple: false,
       directory: false,
-      title: "选择 SSH 私钥文件",
+      title: t("conn.pickKey.title"),
     })
     if (typeof picked === "string") {
       form.keyPath = picked
     }
   } catch (err) {
-    ElMessage.error(String(err))
+    ElMessage.error(tErr(err))
   }
 }
 
@@ -204,7 +207,7 @@ function close() {
       <header class="dlg-head">
         <div>
           <h3>{{ title }}</h3>
-          <p>先测试 SSH 连接，成功后再保存到连接树</p>
+          <p>{{ t("conn.subtitle") }}</p>
         </div>
         <button class="close-btn" @click="close">
           <svg width="12" height="12" viewBox="0 0 12 12">
@@ -216,22 +219,22 @@ function close() {
       <div class="dlg-body">
         <div class="row2">
           <div class="field">
-            <label>连接名称 <i>*</i></label>
-            <el-input v-model="form.name" placeholder="例如：生产 Web 服务器" maxlength="64" />
+            <label>{{ t("conn.label.name") }} <i>*</i></label>
+            <el-input v-model="form.name" :placeholder="t('conn.ph.name')" maxlength="64" />
           </div>
           <div class="field">
-            <label>分组</label>
-            <el-input v-model="form.groupName" placeholder="默认分组" maxlength="32" />
+            <label>{{ t("conn.label.group") }}</label>
+            <el-input v-model="form.groupName" :placeholder="t('conn.ph.group')" maxlength="32" />
           </div>
         </div>
 
         <div class="row-host">
           <div class="field">
-            <label>服务器地址 <i>*</i></label>
-            <el-input v-model="form.host" placeholder="192.168.1.10 或 example.com" />
+            <label>{{ t("conn.label.host") }} <i>*</i></label>
+            <el-input v-model="form.host" :placeholder="t('conn.ph.host')" />
           </div>
           <div class="field port">
-            <label>端口</label>
+            <label>{{ t("conn.label.port") }}</label>
             <el-input-number
               v-model="form.port"
               :min="1"
@@ -243,21 +246,21 @@ function close() {
         </div>
 
         <div class="field">
-          <label>用户名 <i>*</i></label>
-          <el-input v-model="form.username" placeholder="登录服务器的用户名" />
+          <label>{{ t("conn.label.username") }} <i>*</i></label>
+          <el-input v-model="form.username" :placeholder="t('conn.ph.username')" />
         </div>
 
         <div class="field">
-          <label>认证方式</label>
+          <label>{{ t("conn.label.auth") }}</label>
           <el-radio-group v-model="form.authType" class="auth-group">
-            <el-radio-button label="password">密码认证</el-radio-button>
-            <el-radio-button label="key">私钥认证</el-radio-button>
+            <el-radio-button label="password">{{ t("conn.auth.password") }}</el-radio-button>
+            <el-radio-button label="key">{{ t("conn.auth.key") }}</el-radio-button>
           </el-radio-group>
         </div>
 
         <template v-if="form.authType === 'password'">
           <div class="field">
-            <label>登录密码</label>
+            <label>{{ t("conn.label.password") }}</label>
             <el-input
               v-model="form.password"
               type="password"
@@ -269,19 +272,19 @@ function close() {
 
         <template v-else>
           <div class="field">
-            <label>私钥文件 <i>*</i></label>
+            <label>{{ t("conn.label.keyPath") }} <i>*</i></label>
             <div class="key-row">
-              <el-input v-model="form.keyPath" placeholder="选择本地私钥文件（OpenSSH 格式）" readonly />
-              <el-button class="browse" @click="browseKey">浏览</el-button>
+              <el-input v-model="form.keyPath" :placeholder="t('conn.ph.keyPath')" readonly />
+              <el-button class="browse" @click="browseKey">{{ t("conn.browse") }}</el-button>
             </div>
           </div>
           <div class="field">
-            <label>私钥口令（可选）</label>
+            <label>{{ t("conn.label.passphrase") }}</label>
             <el-input
               v-model="form.passphrase"
               type="password"
               show-password
-              placeholder="私钥未加密时留空"
+              :placeholder="t('conn.ph.passphrase')"
             />
           </div>
         </template>
@@ -292,15 +295,15 @@ function close() {
               <path d="M9 3v5M15 3v5M7 8h10v3a5 5 0 01-10 0V8z" stroke="currentColor" stroke-width="1.6" />
               <path d="M12 16v5" stroke="currentColor" stroke-width="1.6" />
             </svg>
-            测试连接
+            {{ t("conn.test") }}
           </el-button>
-          <span class="test-hint">测试通过后才可保存</span>
+          <span class="test-hint">{{ t("conn.test.hint") }}</span>
         </div>
 
         <div v-if="result" class="test-result" :class="result.ok ? 'ok' : 'fail'">
           <span class="tr-icon">{{ result.ok ? "✓" : "✕" }}</span>
           <div class="tr-body">
-            <strong>{{ result.ok ? "连接成功" : "连接失败" }}</strong>
+            <strong>{{ result.ok ? t("conn.test.okTitle") : t("conn.test.failTitle") }}</strong>
             <p>{{ result.message }}</p>
           </div>
           <span v-if="result.ok" class="tr-latency">{{ result.latencyMs }} ms</span>
@@ -308,9 +311,9 @@ function close() {
       </div>
 
       <footer class="dlg-foot">
-        <el-button @click="close">取消</el-button>
+        <el-button @click="close">{{ t("conn.btn.cancel") }}</el-button>
         <el-button type="primary" :disabled="!canSave" :loading="saving" @click="save">
-          保存连接
+          {{ t("conn.btn.save") }}
         </el-button>
       </footer>
     </div>

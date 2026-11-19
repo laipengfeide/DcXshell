@@ -76,6 +76,8 @@ pub struct LanStatus {
     pub port: u16,
     pub listening: bool,
     pub save_dir: String,
+    /// 设置项自定义目录不可用、已回退系统下载目录
+    pub save_dir_fallback: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -169,7 +171,7 @@ impl LanState {
         guard.ip = ip.to_string();
     }
 
-    pub fn status(&self) -> LanStatus {
+    pub fn status(&self, save_dir: PathBuf, save_dir_fallback: bool) -> LanStatus {
         let (name, ip) = {
             let guard = self.identity.lock().unwrap_or_else(|e| e.into_inner());
             (guard.name.clone(), guard.ip.clone())
@@ -179,7 +181,8 @@ impl LanState {
             ip,
             port: TRANSFER_PORT,
             listening: self.listening.load(Ordering::SeqCst),
-            save_dir: self.default_save_dir().to_string_lossy().to_string(),
+            save_dir: save_dir.to_string_lossy().to_string(),
+            save_dir_fallback,
         }
     }
 
@@ -198,9 +201,9 @@ impl LanState {
             inner.pending.remove(id)
         };
         sender
-            .ok_or_else(|| "该传输请求已失效".to_string())?
+            .ok_or_else(|| "err.transfer_request_expired".to_string())?
             .send(Decision { accept, save_dir })
-            .map_err(|_| "该传输请求已失效".to_string())
+            .map_err(|_| "err.transfer_request_expired".to_string())
     }
 
     /// 发起一次发送，立即返回传输 id，进度通过事件推送。
@@ -211,21 +214,21 @@ impl LanState {
                 .peers
                 .get(&peer_id)
                 .map(|(p, _)| p.clone())
-                .ok_or_else(|| "对方已离线".to_string())?
+                .ok_or_else(|| "err.peer_offline".to_string())?
         };
 
-        let meta = std::fs::metadata(&path).map_err(|e| format!("读取文件失败：{e}"))?;
+        let meta = std::fs::metadata(&path).map_err(|e| format!("err.read_file|{e}"))?;
         if !meta.is_file() {
-            return Err("只能发送单个文件".into());
+            return Err("err.single_file_only".into());
         }
         if meta.len() > MAX_FILE_SIZE {
-            return Err(format!("单文件不能超过 {MAX_FILE_TEXT}"));
+            return Err(format!("err.file_too_large|{MAX_FILE_TEXT}"));
         }
 
         let file_name = Path::new(&path)
             .file_name()
             .map(|n| n.to_string_lossy().to_string())
-            .unwrap_or_else(|| "未命名文件".into());
+            .unwrap_or_else(|| "unnamed".into());
         let id = uuid::Uuid::new_v4().to_string();
 
         self.emit(TransferEvent {
@@ -236,7 +239,7 @@ impl LanState {
             total: meta.len(),
             transferred: 0,
             status: "waiting",
-            message: "等待对方确认".into(),
+            message: "tr.waiting".into(),
             path: None,
         });
 
@@ -268,7 +271,6 @@ impl LanState {
             .or_else(|_| self.app.path().home_dir())
             .unwrap_or_else(|_| PathBuf::from("."))
     }
-
     fn emit(&self, event: TransferEvent) {
         let _ = self.app.emit("dcx:transfer", event);
     }
@@ -281,7 +283,7 @@ impl LanState {
         let socket = match UdpSocket::bind(("0.0.0.0", DISCOVERY_PORT)) {
             Ok(s) => s,
             Err(err) => {
-                eprintln!("[lan] 发现端口绑定失败：{err}");
+                eprintln!("[lan] failed to bind discovery port: {err}");
                 return;
             }
         };
@@ -362,7 +364,7 @@ impl LanState {
         let listener = match TcpListener::bind(("0.0.0.0", TRANSFER_PORT)).await {
             Ok(l) => l,
             Err(err) => {
-                eprintln!("[lan] 传输端口监听失败：{err}");
+                eprintln!("[lan] failed to listen on transfer port: {err}");
                 return;
             }
         };
@@ -374,12 +376,12 @@ impl LanState {
                     let state = self.clone();
                     tokio::spawn(async move {
                         if let Err(err) = state.receive_file(stream, addr).await {
-                            eprintln!("[lan] 接收失败：{err}");
+                            eprintln!("[lan] receive failed: {err}");
                         }
                     });
                 }
                 Err(err) => {
-                    eprintln!("[lan] 接受连接失败：{err}");
+                    eprintln!("[lan] failed to accept connection: {err}");
                     tokio::time::sleep(Duration::from_millis(300)).await;
                 }
             }
@@ -390,11 +392,11 @@ impl LanState {
         let mut magic = [0u8; 4];
         stream.read_exact(&mut magic).await.map_err(msg)?;
         if &magic != MAGIC {
-            return Err("协议不匹配".into());
+            return Err("err.protocol_mismatch".into());
         }
         let version = stream.read_u8().await.map_err(msg)?;
         if version != VERSION {
-            return Err(format!("协议版本不支持：{version}"));
+            return Err(format!("err.protocol_version|{version}"));
         }
         let from = read_string(&mut stream).await?;
         let raw_name = read_string(&mut stream).await?;
@@ -416,7 +418,7 @@ impl LanState {
                 total,
                 transferred: 0,
                 status: "failed",
-                message: format!("文件超过 {MAX_FILE_TEXT} 上限"),
+                message: format!("err.file_too_large|{MAX_FILE_TEXT}"),
                 path: None,
             });
             return Ok(());
@@ -452,7 +454,7 @@ impl LanState {
                     total,
                     transferred: 0,
                     status: "declined",
-                    message: "等待确认超时，已拒绝".into(),
+                    message: "tr.decision_timeout".into(),
                     path: None,
                 });
                 return Ok(());
@@ -470,7 +472,7 @@ impl LanState {
                 total,
                 transferred: 0,
                 status: "declined",
-                message: "已拒绝接收".into(),
+                message: "tr.rejected".into(),
                 path: None,
             });
             return Ok(());
@@ -497,7 +499,7 @@ impl LanState {
                     total,
                     transferred: total,
                     status: "done",
-                    message: format!("已保存到 {}", path.to_string_lossy()),
+                    message: "tr.received".into(),
                     path: Some(path.to_string_lossy().to_string()),
                 });
                 Ok(())
@@ -539,13 +541,13 @@ impl LanState {
     ) -> Result<PathBuf, String> {
         tokio::fs::create_dir_all(dir)
             .await
-            .map_err(|e| format!("创建保存目录失败：{e}"))?;
+            .map_err(|e| format!("err.create_save_dir|{e}"))?;
 
         // 先按可用空间判断能否装下，装不下直接失败，不白传几个 GB。
         if let Some(free) = available_bytes(dir) {
             if free < total.saturating_add(DISK_RESERVE) {
                 return Err(format!(
-                    "磁盘空间不足：{} 可用，本次需要 {}",
+                    "err.disk_insufficient|{}|{}",
                     human(free),
                     human(total)
                 ));
@@ -555,7 +557,7 @@ impl LanState {
         let target = unique_path(dir, file_name);
         let mut file = tokio::fs::File::create(&target)
             .await
-            .map_err(|e| format!("创建文件失败：{e}"))?;
+            .map_err(|e| format!("err.create_file|{e}"))?;
 
         self.emit(TransferEvent {
             id: id.to_string(),
@@ -565,7 +567,7 @@ impl LanState {
             total,
             transferred: 0,
             status: "active",
-            message: "正在接收".into(),
+            message: "tr.receiving".into(),
             path: None,
         });
 
@@ -581,19 +583,19 @@ impl LanState {
             let n = match tokio::time::timeout(STALL_TIMEOUT, stream.read(&mut buf[..want])).await {
                 Ok(Ok(n)) => n,
                 Ok(Err(err)) => {
-                    failure = Some(format!("网络错误：{err}"));
+                    failure = Some(msg(err));
                     break;
                 }
                 Err(_) => {
                     failure = Some(format!(
-                        "连接中断：{} 秒未收到数据，已中止",
+                        "err.conn_stall_receive|{}",
                         STALL_TIMEOUT.as_secs()
                     ));
                     break;
                 }
             };
             if n == 0 {
-                failure = Some("连接中断，文件不完整".into());
+                failure = Some("err.conn_incomplete".into());
                 break;
             }
             match tokio::time::timeout(STALL_TIMEOUT, file.write_all(&buf[..n])).await {
@@ -603,7 +605,7 @@ impl LanState {
                     break;
                 }
                 Err(_) => {
-                    failure = Some("写入超时：磁盘长时间无响应".into());
+                    failure = Some("err.write_timeout".into());
                     break;
                 }
             }
@@ -619,7 +621,7 @@ impl LanState {
                     total,
                     transferred: received,
                     status: "active",
-                    message: "正在接收".into(),
+                    message: "tr.receiving".into(),
                     path: None,
                 });
             }
@@ -632,7 +634,7 @@ impl LanState {
             match flushed {
                 Ok(Ok(())) => {}
                 Ok(Err(err)) => failure = Some(write_error(&err)),
-                Err(_) => failure = Some("写入超时：磁盘长时间无响应".into()),
+                Err(_) => failure = Some("err.write_timeout".into()),
             }
         }
 
@@ -648,16 +650,16 @@ impl LanState {
             Ok(Ok(_)) => {}
             Ok(Err(err)) => {
                 let _ = tokio::fs::remove_file(&target).await;
-                return Err(format!("网络错误：{err}"));
+                return Err(msg(err));
             }
             Err(_) => {
                 let _ = tokio::fs::remove_file(&target).await;
-                return Err("连接中断：未收到校验值".into());
+                return Err("err.conn_no_digest".into());
             }
         }
         if hasher.finalize().as_slice() != digest {
             let _ = tokio::fs::remove_file(&target).await;
-            return Err("文件校验失败，已删除不完整文件".into());
+            return Err("err.checksum_mismatch".into());
         }
 
         Ok(target)
@@ -676,7 +678,7 @@ impl LanState {
     ) -> Result<(), String> {
         let meta = tokio::fs::metadata(path)
             .await
-            .map_err(|e| format!("读取文件失败：{e}"))?;
+            .map_err(|e| format!("err.read_file|{e}"))?;
         let total = meta.len();
         let local_name = {
             let guard = self.identity.lock().unwrap_or_else(|e| e.into_inner());
@@ -686,8 +688,8 @@ impl LanState {
         let addr = format!("{}:{}", peer.ip, peer.port);
         let mut stream = tokio::time::timeout(Duration::from_secs(10), TcpStream::connect(&addr))
             .await
-            .map_err(|_| "连接对方超时".to_string())?
-            .map_err(|e| format!("连接对方失败：{e}"))?;
+            .map_err(|_| "err.connect_peer_timeout".to_string())?
+            .map_err(|e| format!("err.connect_peer|{e}"))?;
 
         stream.write_all(MAGIC).await.map_err(msg)?;
         stream.write_all(&[VERSION]).await.map_err(msg)?;
@@ -699,8 +701,8 @@ impl LanState {
         let mut decision = [0u8; 1];
         tokio::time::timeout(DECISION_TIMEOUT, stream.read_exact(&mut decision))
             .await
-            .map_err(|_| "等待对方确认超时".to_string())?
-            .map_err(|e| format!("对方已断开：{e}"))?;
+            .map_err(|_| "err.wait_decision_timeout".to_string())?
+            .map_err(|e| format!("err.peer_disconnected|{e}"))?;
 
         if decision[0] != 1 {
             self.emit(TransferEvent {
@@ -711,7 +713,7 @@ impl LanState {
                 total,
                 transferred: 0,
                 status: "declined",
-                message: "对方拒绝接收".into(),
+                message: "tr.declined".into(),
                 path: None,
             });
             return Ok(());
@@ -725,13 +727,13 @@ impl LanState {
             total,
             transferred: 0,
             status: "active",
-            message: "正在发送".into(),
+            message: "tr.sending".into(),
             path: None,
         });
 
         let mut file = tokio::fs::File::open(path)
             .await
-            .map_err(|e| format!("打开文件失败：{e}"))?;
+            .map_err(|e| format!("err.read_file|{e}"))?;
         let mut buf = vec![0u8; CHUNK_SIZE];
         let mut hasher = Sha256::new();
         let mut sent = 0u64;
@@ -745,10 +747,10 @@ impl LanState {
             // 单块无进展超时：对方断网或长时间不读时及时中止，避免一直挂着。
             match tokio::time::timeout(STALL_TIMEOUT, stream.write_all(&buf[..n])).await {
                 Ok(Ok(())) => {}
-                Ok(Err(err)) => return Err(format!("网络错误：{err}")),
+                Ok(Err(err)) => return Err(msg(err)),
                 Err(_) => {
                     return Err(format!(
-                        "连接中断：{} 秒无法发送数据",
+                        "err.conn_stall_send|{}",
                         STALL_TIMEOUT.as_secs()
                     ))
                 }
@@ -765,14 +767,14 @@ impl LanState {
                     total,
                     transferred: sent,
                     status: "active",
-                    message: "正在发送".into(),
+                    message: "tr.sending".into(),
                     path: None,
                 });
             }
         }
 
         if sent != total {
-            return Err("文件读取长度与预期不符".into());
+            return Err("err.read_length_mismatch".into());
         }
 
         stream.write_all(&hasher.finalize()).await.map_err(msg)?;
@@ -781,8 +783,8 @@ impl LanState {
         let mut ack = [0u8; 1];
         tokio::time::timeout(ACK_TIMEOUT, stream.read_exact(&mut ack))
             .await
-            .map_err(|_| "等待接收结果超时".to_string())?
-            .map_err(|e| format!("对方已断开：{e}"))?;
+            .map_err(|_| "err.wait_ack_timeout".to_string())?
+            .map_err(|e| format!("err.peer_disconnected|{e}"))?;
 
         if ack[0] == 1 {
             self.emit(TransferEvent {
@@ -793,12 +795,12 @@ impl LanState {
                 total,
                 transferred: total,
                 status: "done",
-                message: "传输完成".into(),
+                message: "tr.sent".into(),
                 path: None,
             });
             Ok(())
         } else {
-            Err("接收方保存失败（如磁盘空间不足），详见对方记录".into())
+            Err("err.receiver_save_failed".into())
         }
     }
 }
@@ -810,16 +812,16 @@ fn prune(inner: &mut Inner) {
 }
 
 fn msg(err: std::io::Error) -> String {
-    format!("网络错误：{err}")
+    format!("err.network|{err}")
 }
 
 /// 把落盘错误转成用户能看懂的话：Windows 的磁盘已满错误单独提示。
 fn write_error(err: &std::io::Error) -> String {
     // 112 = ERROR_DISK_FULL，39 = ERROR_HANDLE_DISK_FULL
     if matches!(err.raw_os_error(), Some(112) | Some(39)) {
-        return "磁盘空间不足，接收失败（已清理残留文件）".into();
+        return "err.disk_full_write".into();
     }
-    format!("写入失败：{err}")
+    format!("err.write_failed|{err}")
 }
 
 fn human(size: u64) -> String {
@@ -879,13 +881,32 @@ fn available_bytes(_dir: &Path) -> Option<u64> {
     None
 }
 
+/// 校验目录能否作为接收目录：存在、是目录、可写（写入后立即删除探针文件）。
+pub fn check_save_dir(dir: &Path) -> Result<(), String> {
+    if !dir.exists() {
+        return Err(format!("err.dir_missing|{}", dir.display()));
+    }
+    let meta = std::fs::metadata(dir).map_err(|e| format!("err.dir_check|{}|{e}", dir.display()))?;
+    if !meta.is_dir() {
+        return Err(format!("err.dir_not_directory|{}", dir.display()));
+    }
+    let probe = dir.join(format!(".dcx-write-test-{}", std::process::id()));
+    match std::fs::write(&probe, b"ok") {
+        Ok(()) => {
+            let _ = std::fs::remove_file(&probe);
+            Ok(())
+        }
+        Err(err) => Err(format!("err.dir_not_writable|{}|{err}", dir.display())),
+    }
+}
+
 async fn read_string(stream: &mut TcpStream) -> Result<String, String> {
     let len = stream.read_u16().await.map_err(msg)? as usize;
     if len == 0 {
         return Ok(String::new());
     }
     if len > 4096 {
-        return Err("字段长度异常".into());
+        return Err("err.field_too_long".into());
     }
     let mut buf = vec![0u8; len];
     stream.read_exact(&mut buf).await.map_err(msg)?;
