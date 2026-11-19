@@ -244,7 +244,7 @@ defineExpose({ refresh })
       <div class="record-pane">
         <div class="pane-title">
           传输记录 <span class="count">{{ transfers.length }}</span>
-          <span class="pane-hint">单文件最大 4GB，接收方确认后开始</span>
+          <span class="pane-hint">单文件最大 10GB，接收方确认后开始</span>
         </div>
         <div v-if="transfers.length === 0" class="record-empty">&gt;_ 还没有传输记录</div>
         <div v-for="item in transfers" :key="item.id" class="record" :class="item.status">

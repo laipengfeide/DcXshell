@@ -32,11 +32,19 @@ const DISCOVERY_PORT: u16 = 45454;
 const MAGIC: &[u8; 4] = b"DCX1";
 const VERSION: u8 = 1;
 const CHUNK_SIZE: usize = 64 * 1024;
-/// 单文件上限 4GB（含），超过直接拒绝。
-const MAX_FILE_SIZE: u64 = 4 * 1024 * 1024 * 1024;
+/// 单文件上限 10GiB（含），超过直接拒绝。
+const MAX_FILE_SIZE: u64 = 10 * 1024 * 1024 * 1024;
+const MAX_FILE_TEXT: &str = "10GB";
 const ANNOUNCE_EVERY: Duration = Duration::from_secs(3);
 const PEER_TIMEOUT: Duration = Duration::from_secs(10);
 const DECISION_TIMEOUT: Duration = Duration::from_secs(120);
+/// 单次读写连续无进展超过该时长即判定连接中断，避免半开连接把任务永久挂起。
+/// 注意这是"单块无进展"超时，不是整次传输的总时长限制，大文件可以传任意久。
+const STALL_TIMEOUT: Duration = Duration::from_secs(120);
+/// 期望接收方在传完后回 ACK 的最长等待时间（含其落盘 flush）。
+const ACK_TIMEOUT: Duration = Duration::from_secs(180);
+/// 磁盘空间预检时额外预留的余量，避免刚好写满产生半截文件。
+const DISK_RESERVE: u64 = 64 * 1024 * 1024;
 /// 进度事件最小间隔，避免大文件刷爆前端。
 const PROGRESS_EVERY: Duration = Duration::from_millis(120);
 
@@ -211,7 +219,7 @@ impl LanState {
             return Err("只能发送单个文件".into());
         }
         if meta.len() > MAX_FILE_SIZE {
-            return Err("单文件不能超过 4GB".into());
+            return Err(format!("单文件不能超过 {MAX_FILE_TEXT}"));
         }
 
         let file_name = Path::new(&path)
@@ -408,7 +416,7 @@ impl LanState {
                 total,
                 transferred: 0,
                 status: "failed",
-                message: "文件超过 4GB 上限".into(),
+                message: format!("文件超过 {MAX_FILE_TEXT} 上限"),
                 path: None,
             });
             return Ok(());
@@ -517,6 +525,9 @@ impl LanState {
     }
 
     /// 流式落盘并校验摘要，返回最终保存路径。
+    ///
+    /// 任何失败（连接中断、磁盘写满、校验不符）都会删除已经写出的半截文件，
+    /// 避免在接收目录里留下无法识别的残留。
     async fn store(
         &self,
         stream: &mut TcpStream,
@@ -529,6 +540,18 @@ impl LanState {
         tokio::fs::create_dir_all(dir)
             .await
             .map_err(|e| format!("创建保存目录失败：{e}"))?;
+
+        // 先按可用空间判断能否装下，装不下直接失败，不白传几个 GB。
+        if let Some(free) = available_bytes(dir) {
+            if free < total.saturating_add(DISK_RESERVE) {
+                return Err(format!(
+                    "磁盘空间不足：{} 可用，本次需要 {}",
+                    human(free),
+                    human(total)
+                ));
+            }
+        }
+
         let target = unique_path(dir, file_name);
         let mut file = tokio::fs::File::create(&target)
             .await
@@ -550,17 +573,40 @@ impl LanState {
         let mut buf = vec![0u8; CHUNK_SIZE];
         let mut received = 0u64;
         let mut last = Instant::now();
+        let mut failure: Option<String> = None;
 
         while received < total {
             let want = ((total - received) as usize).min(CHUNK_SIZE);
-            let n = stream.read(&mut buf[..want]).await.map_err(msg)?;
+            // 单块无进展超时：网络断掉时 TCP 可能长时间不报错，这里主动收口。
+            let n = match tokio::time::timeout(STALL_TIMEOUT, stream.read(&mut buf[..want])).await {
+                Ok(Ok(n)) => n,
+                Ok(Err(err)) => {
+                    failure = Some(format!("网络错误：{err}"));
+                    break;
+                }
+                Err(_) => {
+                    failure = Some(format!(
+                        "连接中断：{} 秒未收到数据，已中止",
+                        STALL_TIMEOUT.as_secs()
+                    ));
+                    break;
+                }
+            };
             if n == 0 {
-                let _ = file.flush().await;
-                return Err("连接中断，文件不完整".into());
+                failure = Some("连接中断，文件不完整".into());
+                break;
             }
-            file.write_all(&buf[..n])
-                .await
-                .map_err(|e| format!("写入失败：{e}"))?;
+            match tokio::time::timeout(STALL_TIMEOUT, file.write_all(&buf[..n])).await {
+                Ok(Ok(())) => {}
+                Ok(Err(err)) => {
+                    failure = Some(write_error(&err));
+                    break;
+                }
+                Err(_) => {
+                    failure = Some("写入超时：磁盘长时间无响应".into());
+                    break;
+                }
+            }
             hasher.update(&buf[..n]);
             received += n as u64;
             if last.elapsed() >= PROGRESS_EVERY || received == total {
@@ -579,11 +625,36 @@ impl LanState {
             }
         }
 
-        file.flush().await.map_err(msg)?;
+        let flushed = tokio::time::timeout(STALL_TIMEOUT, file.flush()).await;
         drop(file);
 
+        if failure.is_none() {
+            match flushed {
+                Ok(Ok(())) => {}
+                Ok(Err(err)) => failure = Some(write_error(&err)),
+                Err(_) => failure = Some("写入超时：磁盘长时间无响应".into()),
+            }
+        }
+
+        if let Some(msg) = failure {
+            let _ = tokio::fs::remove_file(&target).await;
+            return Err(msg);
+        }
+
         let mut digest = [0u8; 32];
-        stream.read_exact(&mut digest).await.map_err(msg)?;
+        let digest_read =
+            tokio::time::timeout(STALL_TIMEOUT, stream.read_exact(&mut digest)).await;
+        match digest_read {
+            Ok(Ok(_)) => {}
+            Ok(Err(err)) => {
+                let _ = tokio::fs::remove_file(&target).await;
+                return Err(format!("网络错误：{err}"));
+            }
+            Err(_) => {
+                let _ = tokio::fs::remove_file(&target).await;
+                return Err("连接中断：未收到校验值".into());
+            }
+        }
         if hasher.finalize().as_slice() != digest {
             let _ = tokio::fs::remove_file(&target).await;
             return Err("文件校验失败，已删除不完整文件".into());
@@ -671,7 +742,17 @@ impl LanState {
             if n == 0 {
                 break;
             }
-            stream.write_all(&buf[..n]).await.map_err(msg)?;
+            // 单块无进展超时：对方断网或长时间不读时及时中止，避免一直挂着。
+            match tokio::time::timeout(STALL_TIMEOUT, stream.write_all(&buf[..n])).await {
+                Ok(Ok(())) => {}
+                Ok(Err(err)) => return Err(format!("网络错误：{err}")),
+                Err(_) => {
+                    return Err(format!(
+                        "连接中断：{} 秒无法发送数据",
+                        STALL_TIMEOUT.as_secs()
+                    ))
+                }
+            }
             hasher.update(&buf[..n]);
             sent += n as u64;
             if last.elapsed() >= PROGRESS_EVERY || sent == total {
@@ -698,7 +779,7 @@ impl LanState {
         stream.flush().await.map_err(msg)?;
 
         let mut ack = [0u8; 1];
-        tokio::time::timeout(Duration::from_secs(60), stream.read_exact(&mut ack))
+        tokio::time::timeout(ACK_TIMEOUT, stream.read_exact(&mut ack))
             .await
             .map_err(|_| "等待接收结果超时".to_string())?
             .map_err(|e| format!("对方已断开：{e}"))?;
@@ -717,7 +798,7 @@ impl LanState {
             });
             Ok(())
         } else {
-            Err("对方校验失败".into())
+            Err("接收方保存失败（如磁盘空间不足），详见对方记录".into())
         }
     }
 }
@@ -730,6 +811,72 @@ fn prune(inner: &mut Inner) {
 
 fn msg(err: std::io::Error) -> String {
     format!("网络错误：{err}")
+}
+
+/// 把落盘错误转成用户能看懂的话：Windows 的磁盘已满错误单独提示。
+fn write_error(err: &std::io::Error) -> String {
+    // 112 = ERROR_DISK_FULL，39 = ERROR_HANDLE_DISK_FULL
+    if matches!(err.raw_os_error(), Some(112) | Some(39)) {
+        return "磁盘空间不足，接收失败（已清理残留文件）".into();
+    }
+    format!("写入失败：{err}")
+}
+
+fn human(size: u64) -> String {
+    const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
+    let mut value = size as f64;
+    let mut index = 0;
+    while value >= 1024.0 && index < UNITS.len() - 1 {
+        value /= 1024.0;
+        index += 1;
+    }
+    if index == 0 {
+        format!("{size} B")
+    } else {
+        format!("{value:.1} {}", UNITS[index])
+    }
+}
+
+/// 目标目录所在卷的可用字节数；拿不到返回 None（此时退化为写入时再报错）。
+#[cfg(windows)]
+fn available_bytes(dir: &Path) -> Option<u64> {
+    use std::{ffi::OsStr, os::windows::ffi::OsStrExt};
+
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn GetDiskFreeSpaceExW(
+            lp_directory_name: *const u16,
+            lp_free_bytes_available_to_caller: *mut u64,
+            lp_total_number_of_bytes: *mut u64,
+            lp_total_number_of_free_bytes: *mut u64,
+        ) -> i32;
+    }
+
+    let wide: Vec<u16> = OsStr::new(dir)
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+    let mut free_to_caller = 0u64;
+    let mut total = 0u64;
+    let mut total_free = 0u64;
+    let ok = unsafe {
+        GetDiskFreeSpaceExW(
+            wide.as_ptr(),
+            &mut free_to_caller,
+            &mut total,
+            &mut total_free,
+        )
+    };
+    if ok != 0 {
+        Some(free_to_caller)
+    } else {
+        None
+    }
+}
+
+#[cfg(not(windows))]
+fn available_bytes(_dir: &Path) -> Option<u64> {
+    None
 }
 
 async fn read_string(stream: &mut TcpStream) -> Result<String, String> {
